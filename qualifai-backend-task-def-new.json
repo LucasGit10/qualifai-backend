@@ -1,0 +1,80 @@
+{
+  "family": "qualifai-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::772316781052:role/qualifai-ecs-execution-role-new",
+  "taskRoleArn": "arn:aws:iam::772316781052:role/qualifai-ecs-task-role-new",
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "772316781052.dkr.ecr.us-east-1.amazonaws.com/qualifai-backend:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3001,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "PORT",
+          "value": "3001"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "MONGODB_URI",
+          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/mongodb-uri"
+        },
+        {
+          "name": "JWT_SECRET",
+          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/jwt-secret"
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/openai-key"
+        },
+        {
+          "name": "EVOLUTION_API_URL",
+          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/evolution-api-url"
+        },
+        {
+          "name": "EVOLUTION_API_KEY",
+          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/evolution-api-key"
+        },
+        {
+          "name": "WEBHOOK_BASE_URL",
+          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/webhook-base-url"
+        },
+        {
+          "name": "HUBSPOT_ACCESS_TOKEN",
+          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/hubspot-token"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/qualifai-backend-new",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://http://qualifai-alb-new-1345666069.us-east-1.elb.amazonaws.com:3001/health || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      }
+    }
+  ]
+}

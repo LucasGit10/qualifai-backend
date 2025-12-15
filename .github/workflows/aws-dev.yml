@@ -1,0 +1,52 @@
+name: Deploy Backend to AWS ECS (Development)
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: github-actions-deployer
+
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      ECR_REPO_NAME: ${{ secrets.ECR_REPO_NAME }}
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v3
+
+      - name: Configurar credenciais AWS
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login no Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Build da imagem Docker
+        run: |
+          sudo docker build -t $ECR_REPO_NAME . --platform linux/amd64
+
+      - name: Tag da imagem Docker
+        run: |
+          docker tag $ECR_REPO_NAME:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
+
+      - name: Push da imagem para ECR
+        run: |
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
+
+      - name: Atualizar serviço ECS
+        run: |
+          aws ecs update-service \
+            --cluster ${{ secrets.NAME_CLUSTER_DEV }} \
+            --service ${{ secrets.ECR_REPO_NAME }} \
+            --task-definition ${{ secrets.ECR_REPO_NAME }} \
+            --force-new-deployment \
+            --region $AWS_REGION

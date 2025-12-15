@@ -1,0 +1,287 @@
+curl -X POST "http://localhost:8080/webhook/set/Melo1976" \
+  -H "Content-Type: application/json" \
+  -H "apikey: 429683C4C977415CAAFCCE10F7D57E11" \
+  -d '{
+    "url": "http://host.docker.internal:3001/api/webhooks/evolution/Melo1976",
+    "enabled": true,
+    "events": [                  
+      "APPLICATION_STARTUP",
+      "QRCODE_UPDATED",
+      "CONNECTION_UPDATE",
+      "MESSAGES_UPSERT",
+      "MESSAGES_UPDATE",
+      "SEND_MESSAGE"
+    ]
+  }'
+When it's in docker so it doesn't work connection refused
+
+Access: https://app.hubspot.com/
+Go em: Settings → Integrations → Private Apps
+Create a new app with the following permissions:
+
+crm.objects.contacts.read
+crm.objects.contacts.write
+crm.objects.deals.read
+crm.objects.deals.write
+crm.objects.tasks.read
+crm.objects.tasks.write
+crm.objects.notes.read
+crm.objects.notes.write
+
+
+Copy the generated Access Token
+Add it to .env:
+
+envCopyHUBSPOT_ACCESS_TOKEN=pat-na1-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+
+
+
+ALB DNS: qualifai-alb-604069372.us-east-1.elb.amazonaws.com
+
+Frontend Target Group: arn:aws:elasticloadbalancing:us-east-1:772316781052:targetgroup/qualifai-frontend-tg/907904d12c8e59aa
+Backend Target Group: arn:aws:elasticloadbalancing:us-east-1:772316781052:targetgroup/qualifai-backend-tg/29295acbf3785b56
+
+
+
+Perfect! Let's configure everything to use the ALB directly. The nginx.conf is correct; we just need to update the Task Definitions and rebuild with the correct URL.
+1. The nginx.conf is perfect, keep it that way
+frontend/nginx.conf (já está correto)
+nginxCopyevents {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    server {
+        listen 80;
+        server_name localhost;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        # React Router support
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Health check
+        location /health {
+            access_log off;
+            return 200 "healthy\n";
+            add_header Content-Type text/plain;
+        }
+
+        # Security headers
+        add_header X-Frame-Options DENY;
+        add_header X-Content-Type-Options nosniff;
+        add_header X-XSS-Protection "1; mode=block";
+    }
+}
+2. Rebuild Frontend with ALB URL
+bashCopy# Load variables
+source infrastructure-ids.txt
+
+# Login in ECR
+aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+# Set ALB URL
+ALB_URL="http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com"
+
+# Rebuild Frontend
+cd frontend
+
+# Build with ALB URL
+export REACT_APP_API_URL="${ALB_URL}/api"
+
+echo "🔨 Building frontend com URL: $REACT_APP_API_URL"
+
+docker build -t ${PROJECT_NAME}-frontend . --platform linux/amd64
+docker tag ${PROJECT_NAME}-frontend:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${PROJECT_NAME}-frontend:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${PROJECT_NAME}-frontend:latest
+
+cd ..
+
+echo "✅ Frontend rebuilded com URL do ALB!"
+3. Atualizar Task Definition do Frontend
+bashCopy# Task definition com URL do ALB
+cat > frontend-task-definition-alb.json << EOF
+{
+  "family": "${PROJECT_NAME:-sdr-virtual}-frontend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID:-772316781052}:role/${PROJECT_NAME:-sdr-virtual}-ecs-execution-role",
+  "containerDefinitions": [
+    {
+      "name": "frontend",
+      "image": "${AWS_ACCOUNT_ID:-772316781052}.dkr.ecr.${AWS_REGION:-us-east-1}.amazonaws.com/${PROJECT_NAME:-sdr-virtual}-frontend:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "REACT_APP_API_URL",
+          "value": "http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com/api"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/${PROJECT_NAME:-sdr-virtual}-frontend",
+          "awslogs-region": "${AWS_REGION:-us-east-1}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:80/health || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 30
+      }
+    }
+  ]
+}
+EOF
+
+# Registrar nova task definition
+aws ecs register-task-definition \
+    --cli-input-json file://frontend-task-definition-alb.json \
+    --region ${AWS_REGION:-us-east-1}
+
+echo "✅ Task Definition do frontend atualizada!"
+4. Atualizar Task Definition do Backend (atualizar webhook URL)
+bashCopy# Atualizar parâmetro do webhook para usar ALB
+aws ssm put-parameter \
+    --name "/${PROJECT_NAME:-sdr-virtual}/webhook-base-url" \
+    --value "http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com" \
+    --type "String" \
+    --region ${AWS_REGION:-us-east-1} \
+    --overwrite
+
+echo "✅ Parâmetro webhook-base-url atualizado!"
+
+# Task definition do backend não precisa mudar, só está usando a variável do SSM
+5. Atualizar os serviços ECS
+bashCopy# Atualizar serviço do frontend
+aws ecs update-service \
+    --cluster ${PROJECT_NAME}-cluster \
+    --service ${PROJECT_NAME}-frontend \
+    --task-definition ${PROJECT_NAME}-frontend \
+    --force-new-deployment \
+    --region ${AWS_REGION:-us-east-1}
+
+echo "🚀 Frontend deployment iniciado!"
+
+# Atualizar serviço do backend (para pegar nova URL do webhook)
+aws ecs update-service \
+    --cluster ${PROJECT_NAME:-sdr-virtual}-cluster \
+    --service ${PROJECT_NAME:-sdr-virtual}-backend \
+    --force-new-deployment \
+    --region ${AWS_REGION:-us-east-1}
+
+echo "🚀 Backend deployment iniciado!"
+6. Aguardar deployments
+bashCopy# Aguardar serviços estabilizarem
+echo "⏳ Aguardando deployments..."
+
+aws ecs wait services-stable \
+    --cluster ${PROJECT_NAME:-sdr-virtual}-cluster \
+    --services ${PROJECT_NAME:-sdr-virtual}-frontend ${PROJECT_NAME:-sdr-virtual}-backend \
+    --region ${AWS_REGION:-us-east-1}
+
+echo "✅ Deployments concluídos!"
+7. Testar aplicação
+bashCopy# Testar aplicação
+ALB_URL="http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com"
+
+echo "🧪 Testando aplicação..."
+
+echo "1. Frontend:"
+curl -I $ALB_URL 2>/dev/null | head -1
+
+echo ""
+echo "2. Frontend Health:"
+curl -s $ALB_URL/health
+
+echo ""
+echo "3. Backend Health:"
+curl -s $ALB_URL/api/health
+
+echo ""
+echo "4. Verificar se React carregou:"
+curl -s $ALB_URL | grep -o '<title>.*</title>' | head -1
+
+echo ""
+echo "🎉 URLs funcionais:"
+echo "   Frontend: $ALB_URL"
+echo "   API: $ALB_URL/api/health"
+echo "   Webhook Evolution: $ALB_URL/api/webhooks/evolution/[INSTANCE_NAME]"
+8. Configurar Evolution API para usar ALB
+bashCopy# Comando para atualizar webhook na Evolution API
+ALB_URL="http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com"
+
+echo "🔧 Para atualizar Evolution API, execute:"
+echo ""
+echo "curl -X POST http://evolution-api-alb-710570420.us-east-1.elb.amazonaws.com:8080/webhook/set/SUA_INSTANCIA \\"
+echo "  -H 'Content-Type: application/json' \\"
+echo "  -H 'apikey: SUA_API_KEY' \\"
+echo "  -d '{"
+echo "    \"url\": \"$ALB_URL/api/webhooks/evolution/SUA_INSTANCIA\","
+echo "    \"events\": ["
+echo "      \"APPLICATION_STARTUP\","
+echo "      \"QRCODE_UPDATED\","
+echo "      \"CONNECTION_UPDATE\","
+echo "      \"MESSAGES_UPSERT\","
+echo "      \"MESSAGES_UPDATE\","
+echo "      \"SEND_MESSAGE\""
+echo "    ]"
+echo "  }'"
+9. Verificar logs se houver problemas
+bashCopy# Ver logs dos serviços
+echo "📜 Para verificar logs:"
+echo "Frontend: aws logs tail /ecs/${PROJECT_NAME:-sdr-virtual}-frontend --follow --region ${AWS_REGION:-us-east-1}"
+echo "Backend: aws logs tail /ecs/${PROJECT_NAME:-sdr-virtual}-backend --follow --region ${AWS_REGION:-us-east-1}"
+10. Salvar configuração final
+bashCopy# Atualizar arquivo de configuração
+cat >> infrastructure-ids.txt << EOF
+
+# URLs finais
+ALB_URL=http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com
+FRONTEND_URL=http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com
+API_URL=http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com/api
+WEBHOOK_URL=http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com/api/webhooks/evolution
+EOF
+
+echo "✅ Configuração salva!"
+Execute esses passos em ordem. Agora sua aplicação vai usar diretamente o ALB e deve funcionar perfeitamente! 🚀
+URLs finais:
+
+Frontend: http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com
+API: http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com/api/health
+Webhook: http://qualifai-alb-604069372.us-east-1.elb.amazonaws.com/api/webhooks/evolution/[INSTANCE]
+
+
+curl -X POST http://localhost:8080/webhook/set/alexTesteQualifai09 \
+  -H "Content-Type: application/json" \
+  -H "apikey: 429683C4C977415CAAFCCE10F7D57E11" \
+  -d '{
+    "url": "http://localhost:3001/api/webhooks/evolution/alexTesteQualifai09",    "events": [
+      "APPLICATION_STARTUP",
+      "QRCODE_UPDATED",
+      "CONNECTION_UPDATE",
+      "MESSAGES_UPSERT",
+      "MESSAGES_UPDATE",
+      "SEND_MESSAGE"
+    ]
+  }'

@@ -1,0 +1,40 @@
+{
+    "Changes": [
+        {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+                "Name": "qualifai.tech",
+                "Type": "A",
+                "AliasTarget": {
+                    "DNSName": "qualifai-alb-604069372.us-east-1.elb.amazonaws.com",
+                    "EvaluateTargetHealth": false,
+                    "HostedZoneId": "Z35SXDOTRQ7X7K"
+                }
+            }
+        },
+        {
+            "Action": "UPSERT", 
+            "ResourceRecordSet": {
+                "Name": "www.qualifai.tech",
+                "Type": "A",
+                "AliasTarget": {
+                    "DNSName": "qualifai-alb-604069372.us-east-1.elb.amazonaws.com",
+                    "EvaluateTargetHealth": false,
+                    "HostedZoneId": "Z35SXDOTRQ7X7K"
+                }
+            }
+        },
+        {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+                "Name": "api.qualifai.tech", 
+                "Type": "A",
+                "AliasTarget": {
+                    "DNSName": "qualifai-alb-604069372.us-east-1.elb.amazonaws.com",
+                    "EvaluateTargetHealth": false,
+                    "HostedZoneId": "Z35SXDOTRQ7X7K"
+                }
+            }
+        }
+    ]
+}

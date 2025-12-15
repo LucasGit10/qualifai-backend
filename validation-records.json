@@ -1,0 +1,30 @@
+{
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "_1ae68763fe25743ac6e9f538e488d31f.qualifai.tech.",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [
+          {
+            "Value": "_355029700ceed71d1499a4b7e3aee4fa.xlfgrmvvlj.acm-validations.aws."
+          }
+        ]
+      }
+    },
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "_1ae68763fe25743ac6e9f538e488d31f.qualifai.tech.",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [
+          {
+            "Value": "_355029700ceed71d1499a4b7e3aee4fa.xlfgrmvvlj.acm-validations.aws."
+          }
+        ]
+      }
+    }
+  ]
+}
