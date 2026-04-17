@@ -32,7 +32,7 @@ async function getLandingChatResponse(userInput, conversation = []) {
   messages.push({ role: 'user', content: userInput });
 
   const response = await openai.chat.completions.create({
-    model: 'gpt-4',
+    model: 'gpt-4o-mini',
     messages: messages,
     temperature: 0.7,
     max_tokens: 1000,

@@ -1,8 +1,10 @@
-const Conversation = require('../models/Conversation');
-const User = require('../models/User');
-const aiController = require('../controllers/aiController');
+const { getModel } = require('../utils/modelProvider');
+const Conversation = getModel('Conversation');
+const User = getModel('User');
+const aiController = require('../controllers/ai/ai.controller');
 const aiService = require('./aiService');
 const logger = require('../utils/logger');
+const socketHub = require('../utils/socketHub');
 
 class FollowupService {
   async checkAndSendFollowups() {
@@ -94,7 +96,7 @@ class FollowupService {
 
           await conversation.save();
           
-          const io = require('../server').io;
+          const io = socketHub.getIO();
           if (io) {
             io.to(`user-${user._id.toString()}`).emit('conversation_updated', { conversation });
           }

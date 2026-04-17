@@ -55,7 +55,11 @@ const leadSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['novo', 'contatado', 'qualificado', 'morno', 'frio', 'convertido', 'nao_respondeu', 'dispensou_ligacao', 'escaleted'],
+    enum: [
+      'novo', 'contatado', 'em_negociacao', 'acordado',
+      'ativo', 'quitado', 'judicial',
+      'nao_respondeu', 'dispensou_ligacao'
+    ],
     default: 'novo'
   },
   hubspot: {
@@ -140,6 +144,20 @@ const leadSchema = new mongoose.Schema({
   metadata: {
     type: Map,
     of: String
+  },
+  socialMedia: {
+    linkedin: { type: String, trim: true },
+    instagram: { type: String, trim: true },
+    facebook: { type: String, trim: true }
+  },
+  taxId: { type: String, trim: true },
+  address: {
+    street: String,
+    number: String,
+    complement: String,
+    city: String,
+    state: String,
+    zipCode: String
   },
   user: {
     type: mongoose.Schema.Types.ObjectId,

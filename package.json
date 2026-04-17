@@ -5,8 +5,10 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js",
-    "test": "jest"
+    "dev": "nodemon -L src/server.js",
+    "test": "jest",
+    "seed:admin": "node src/seed/seedAdmin.js",
+    "seed:data": "node src/seed/seedData.js"
   },
   "dependencies": {
     "@deepgram/sdk": "^4.11.2",
@@ -40,6 +42,7 @@
     "nodemailer": "^6.10.1",
     "openai": "^4.11.1",
     "pdf-parse": "^1.1.3",
+    "pdfkit": "^0.18.0",
     "signale": "^1.4.0",
     "slugify": "^1.6.6",
     "smee-client": "^4.3.1",

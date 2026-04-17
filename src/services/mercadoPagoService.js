@@ -107,7 +107,8 @@ class MercadoPagoService {
         customer = await this.createCustomer(user);
       }
       
-      const frontendUrl = 'https://qualifai.tech/';
+      const appUrl = (process.env.APP_URL || process.env.FRONTEND_URL || 'https://qualifai.tech/').replace(/\/$/, '');
+      const backUrl = `${appUrl}/app/dashboard`;
 
       const payload = {
         reason: plan.name,
@@ -121,7 +122,7 @@ class MercadoPagoService {
             frequency_type: "days"
           }
         },
-        back_url: `${frontendUrl}/app/dashboard`, // URL de retorno após o pagamento
+        back_url: backUrl, // URL de retorno após o pagamento
         payer_email: user.email,
       };
 

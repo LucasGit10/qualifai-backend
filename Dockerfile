@@ -1,33 +1,21 @@
-# backend/Dockerfile
 FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy package files
+# Add dependencies that might be needed by some npm packages like ffmpeg or python-based native modules
+RUN apk add --no-cache curl python3 make g++
+
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install ALL dependencies (including devDependencies like nodemon)
+RUN npm install
 
-# Copy source code
+# The source code will be mapped via volume in docker-compose, 
+# but it's good practice to copy it for a standalone run.
 COPY . .
 
-RUN apk add --no-cache curl
-
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
-
-# Change ownership of the app directory
-RUN chown -R nodejs:nodejs /app
-USER nodejs
-
-
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-CMD curl -f http://localhost:3001/health || exit 1
-
-# Expose port
+# Expose the API port
 EXPOSE 3001
 
-# Start the application
-CMD ["npm", "start"]
+# Start development server with hot-reload (nodemon)
+CMD ["npm", "run", "dev"]

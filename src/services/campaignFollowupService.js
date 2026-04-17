@@ -1,9 +1,10 @@
 // services/campaignFollowupService.js
 
-const Campaign = require('../models/Campaign');
+const { getModel } = require('../utils/modelProvider');
+const Campaign = getModel('Campaign');
 const logger = require('../utils/logger');
-const aiController = require('../controllers/aiController');
-const { io } = require('../server');
+const aiController = require('../controllers/ai/ai.controller');
+const socketHub = require('../utils/socketHub');
 
 class CampaignFollowupService {
   async processCampaignFollowups() {
@@ -79,6 +80,7 @@ class CampaignFollowupService {
 
         await campaign.save();
 
+        const io = socketHub.getIO();
         if (io) {
             io.to(`user-${campaign.user._id.toString()}`).emit('campaign_updated', { campaign });
         }

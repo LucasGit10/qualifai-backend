@@ -1,17 +1,3 @@
-/**
- * @file Contém as definições de todos os planos de assinatura do Stripe.
- * Este arquivo centraliza os detalhes de cada plano, facilitando a manutenção e
- * o gerenciamento de produtos.
- *
- * IMPORTANTE: Os priceId's devem ser criados no seu painel do Stripe e substituídos aqui.
- * Você pode criar seus produtos e preços aqui: https://dashboard.stripe.com/products
- *
- * Estrutura de um plano:
- * - id: Identificador único usado internamente.
- * - priceId: O ID do preço (Price API ID) do Stripe.
- * - name: Nome completo do plano, exibido para o usuário.
- * - associatedPlan: O nível do plano ('basic', 'medium', 'pro') para controle de acesso interno.
- */
 module.exports = {
   // Planos BÁSICOS
   'basic-monthly': {

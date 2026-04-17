@@ -1,7 +1,8 @@
-const Lead = require('../models/Lead');
-const User = require('../models/User');
+const { getModel } = require('../utils/modelProvider');
+const Lead = getModel('Lead');
+const User = getModel('User');
 // 1. IMPORTAÇÃO NECESSÁRIA: Precisamos do model de Conversation
-const Conversation = require('../models/Conversation'); 
+const Conversation = getModel('Conversation'); 
 const logger = require('../utils/logger');
 
 const INACTIVITY_PERIOD_SECONDS = 50;

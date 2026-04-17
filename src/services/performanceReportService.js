@@ -1,8 +1,9 @@
 
 
-const User = require('../models/User');
-const Lead = require('../models/Lead');
-const Event = require('../models/Events');
+const { getModel } = require('../utils/modelProvider');
+const User = getModel('User');
+const Lead = getModel('Lead');
+const Event = getModel('Events');
 const aiService = require('./aiService');
 const emailService = require('../services/emailService');
 const whatsappService = require('../services/whatsappService');
@@ -10,7 +11,7 @@ const evolutionApiService = require('../services/evolutionApiService');
 const zapiService = require('../services/zapiService');
 const logger = require('../utils/logger');
 const { startOfDay, endOfDay, subDays } = require('date-fns');
-const Conversation = require('../models/Conversation');
+const Conversation = getModel('Conversation');
 
 class PerformanceReportService {
 
@@ -214,7 +215,8 @@ class PerformanceReportService {
     }
 
     if (provider === 'whatsapp') {
-      const instance = await require('../models/WhatsAppInstance').findOne({ user: user._id, status: 'connected' });
+      const WhatsAppInstance = getModel('WhatsAppInstance');
+      const instance = await WhatsAppInstance.findOne({ user: user._id, status: 'connected' });
       if (instance) {
         await whatsappService.sendTextMessage(instance, phone, textContent);
       } else {
@@ -225,7 +227,8 @@ class PerformanceReportService {
         await zapiService.sendMessage(instanceId, token, phone, textContent);
     } else if (provider === 'evolution') {
         // Evolution API needs an instance name. We'll assume the first active one.
-        const instance = await require('../models/WhatsAppInstance').findOne({ user: user._id, status: 'connected' });
+        const WhatsAppInstance = getModel('WhatsAppInstance');
+        const instance = await WhatsAppInstance.findOne({ user: user._id, status: 'connected' });
         if(instance) {
             await evolutionApiService.sendMessage(instance.instanceName, phone, textContent);
         } else {

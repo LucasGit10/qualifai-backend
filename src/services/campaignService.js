@@ -1,8 +1,8 @@
-const Campaign = require('../models/Campaign');
-const Lead = require('../models/Lead');
-// const Conversation = require('../models/Conversation'); // Não estava sendo usado
-const WhatsAppInstance = require('../models/WhatsAppInstance');
-const User = require('../models/User');
+const { getModel } = require('../utils/modelProvider');
+const Campaign = getModel('Campaign');
+const Lead = getModel('Lead');
+const WhatsAppInstance = getModel('WhatsAppInstance');
+const User = getModel('User');
 const evolutionApiService = require('./evolutionApiService');
 const zapiService = require('./zapiService');
 const emailService = require('./emailService');
@@ -172,6 +172,13 @@ class CampaignService {
         updatedCampaign.completedAt = new Date();
         await updatedCampaign.save();
         logger.info('Campanha completada:', { campaignId });
+        
+        const oneSignalService = require('./oneSignalService');
+        oneSignalService.sendPushNotification(
+            updatedCampaign.user.toString(),
+            'Campanha Finalizada',
+            `Sua campanha "${updatedCampaign.name}" acabou de ser concluída.`
+        );
       }
 
       this.activeCampaigns.delete(campaignId);

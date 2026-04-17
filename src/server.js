@@ -12,41 +12,66 @@ const { URL } = require('url');
 const path = require('path');
 
 const connectDB = require('./config/database');
-const authRoutes = require('./routes/auth');
-const leadRoutes = require('./routes/leads');
-const conversationRoutes = require('./routes/conversations');
-const aiRoutes = require('./routes/ai');
-const integrationRoutes = require('./routes/integrations');
-const dashboardRoutes = require('./routes/dashboard');
-const webhookRoutes = require('./routes/webhooks');
-const evolutionRoutes = require('./routes/evolution');
-const zapiRoutes = require('./routes/zapi');
 const errorHandler = require('./middleware/errorHandler');
 const logger = require('./utils/logger');
-const demoRoutes = require('./routes/demo');
-const kanbanRoutes = require('./routes/kanban');
-const supportRoutes = require('./routes/support');
-const calendarRoutes = require('./routes/calendar');
-const whatsappRoute = require('./routes/whatsappInstance');
-const landingAIRouter = require('./routes/landingAI');
-const adminRoutes = require('./routes/admin');
-const paymentRoutes = require('./routes/payment');
-const paymentController = require('./controllers/paymentController');
-const campaignRoutes = require('./routes/campaigns');
 const followupService = require('./services/followupService');
-const messageTemplate = require('./routes/messageTemplate');
-const voiceAgentRoutes = require('./routes/voiceAgent');
-const handleVoiceConnection = require('./services/voiceAgentService');
-const whatsAppAiRoutes = require('./routes/whatsappAi');
-const managerRoutes = require('./routes/manager');
-const rankingRoutes = require('./routes/ranking');
-const instagramRoutes = require('./routes/instagram')
 const campaignFollowupService = require('./services/campaignFollowupService');
 const performanceReportService = require('./services/performanceReportService');
-const blogRoutes = require('./routes/blog');
-const performanceReportRoutes = require('./routes/performanceReport');
 const leadLifecycleService = require('./services/leadLifecycleService');
-const lushaRotes = require('./routes/lusha');
+const debtAutomationService = require('./services/debtAutomationService');
+const autoSeed = require('./utils/autoSeed');
+const socketHub = require('./utils/socketHub');
+const handleVoiceConnection = require('./services/voiceAgentService');
+
+// ── Routes: AI ────────────────────────────────────────────────────────────────
+const aiRoutes              = require('./routes/ai/ai.routes');
+const aiTrainingRoutes      = require('./routes/ai/training.routes');
+const landingAIRouter       = require('./routes/ai/landing.routes');
+const voiceAgentRoutes      = require('./routes/ai/voice-agent.routes');
+
+// ── Routes: Auth ──────────────────────────────────────────────────────────────
+const authRoutes            = require('./routes/auth/auth.routes');
+const adminRoutes           = require('./routes/auth/admin.routes');
+const managerRoutes         = require('./routes/auth/manager.routes');
+
+// ── Routes: Collections ───────────────────────────────────────────────────────
+const debtRoutes            = require('./routes/collections/debt.routes');
+const leadRoutes            = require('./routes/collections/lead.routes');
+const campaignRoutes        = require('./routes/collections/campaign.routes');
+const kanbanRoutes          = require('./routes/collections/kanban.routes');
+const spreadsheetRoutes     = require('./routes/collections/spreadsheet.routes');
+
+// ── Routes: Conversations ─────────────────────────────────────────────────────
+const conversationRoutes    = require('./routes/conversations/conversation.routes');
+const whatsAppAiRoutes      = require('./routes/conversations/whatsapp-ai.routes');
+const whatsappRoute         = require('./routes/conversations/whatsapp-instance.routes');
+const instagramRoutes       = require('./routes/conversations/instagram.routes');
+const messageTemplate       = require('./routes/conversations/message-template.routes');
+const zapiRoutes            = require('./routes/conversations/zapi.routes');
+
+// ── Routes: Integrations ──────────────────────────────────────────────────────
+const integrationRoutes     = require('./routes/integrations/integration.routes');
+const evolutionRoutes       = require('./routes/integrations/evolution.routes');
+const lushaRoutes           = require('./routes/integrations/lusha.routes');
+
+// ── Routes: Platform ──────────────────────────────────────────────────────────
+const dashboardRoutes       = require('./routes/platform/dashboard.routes');
+const calendarRoutes        = require('./routes/platform/calendar.routes');
+const meetingRoutes         = require('./routes/platform/meeting.routes');
+const notificationRoutes    = require('./routes/platform/notification.routes');
+const rankingRoutes         = require('./routes/platform/ranking.routes');
+const performanceReportRoutes = require('./routes/platform/performance-report.routes');
+const supportRoutes         = require('./routes/platform/support.routes');
+const webhookRoutes         = require('./routes/platform/webhooks.routes');
+
+// ── Routes: Billing ───────────────────────────────────────────────────────────
+const paymentRoutes         = require('./routes/billing/payment.routes');
+const demoRoutes            = require('./routes/billing/demo.routes');
+const blogRoutes            = require('./routes/billing/blog.routes');
+
+// ── Controller direto (necessário antes do middleware JSON) ───────────────────
+const paymentController     = require('./controllers/billing/payment.controller');
+
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -94,7 +119,8 @@ app.use((req, res, next) => {
 // Corrigido para apontar para 'public/uploads'
 app.use('/uploads', express.static(path.join(__dirname, '..', 'public/uploads')));
 
-const io = new Server(server, { cors: { origin: allowedOrigins } });
+// Inicializa o Socket.io via Hub (evita dependência circular)
+const io = socketHub.init(server);
 app.set('io', io);
 const wss = new WebSocketServer({ noServer: true });
 
@@ -116,42 +142,75 @@ wss.on('connection', (ws, request) => {
   logger.info('New Twilio WebSocket connection established.');
   handleVoiceConnection(ws, io);
 });
-module.exports.io = io;
+// Exportação removida para usar socketHub.getIO() nos serviços
+module.exports = { app, server };
 
 io.on('connection', (socket) => {
-  socket.on('join-room', (room) => socket.join(room));
-  socket.on('disconnect', () => {});
+  logger.info(`[Socket] Novo cliente conectado: ${socket.id}`);
+  socket.on('join-room', (room) => {
+    logger.info(`[Socket] Cliente ${socket.id} entrou na sala: ${room}`);
+    socket.join(room);
+  });
+  socket.on('disconnect', (reason) => {
+    logger.info(`[Socket] Cliente ${socket.id} desconectado. Motivo: ${reason}`);
+  });
 });
 
-connectDB();
+if (process.env.USE_MOCK_DATA === 'true') {
+  logger.info('🚀 Mock Mode Enabled: Skipping real DB connection');
+} else {
+  connectDB().then(() => {
+    if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
+      autoSeed();
+    }
+  });
+}
 
-app.use('/api/webhooks', webhookRoutes);
-app.use('/api/auth', authRoutes);
-app.use('/api/leads', leadRoutes);
-app.use('/api/conversations', conversationRoutes);
-app.use('/api/ai', aiRoutes);
-app.use('/api/integrations', integrationRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/campaigns', campaignRoutes);
-app.use('/api/demo', demoRoutes);
-app.use('/api/kanban', kanbanRoutes);
-app.use('/api/support', supportRoutes);
-app.use('/api/calendar', calendarRoutes);
-app.use('/api/landing-ai', landingAIRouter);
-app.use('/api/admin', adminRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/whatsapp', whatsappRoute);
-app.use('/api/evolution', evolutionRoutes);
-app.use('/api/zapi', zapiRoutes);
-app.use('/api/template-message', messageTemplate);
+// ── AI ────────────────────────────────────────────────────────────────────────
+app.use('/api/ai',          aiRoutes);
+app.use('/api/ai-training', aiTrainingRoutes);
+app.use('/api/landing-ai',  landingAIRouter);
 app.use('/api/voice-agent', voiceAgentRoutes);
-app.use('/api/reports', performanceReportRoutes);
-app.use('/api/blog', blogRoutes);
-app.use('/api/whatsapp-ai', whatsAppAiRoutes);
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+app.use('/api/auth',    authRoutes);
+app.use('/api/admin',   adminRoutes);
 app.use('/api/manager', managerRoutes);
-app.use('/api/ranking', rankingRoutes);
-app.use('/api/instagram', instagramRoutes);
-app.use('/api/lusha', lushaRotes);
+
+// ── Collections ───────────────────────────────────────────────────────────────
+app.use('/api/debts',        debtRoutes);
+app.use('/api/leads',        leadRoutes);
+app.use('/api/campaigns',    campaignRoutes);
+app.use('/api/kanban',       kanbanRoutes);
+app.use('/api/spreadsheets', spreadsheetRoutes);
+
+// ── Conversations ─────────────────────────────────────────────────────────────
+app.use('/api/conversations',    conversationRoutes);
+app.use('/api/whatsapp-ai',      whatsAppAiRoutes);
+app.use('/api/whatsapp',         whatsappRoute);
+app.use('/api/instagram',        instagramRoutes);
+app.use('/api/template-message', messageTemplate);
+app.use('/api/zapi',             zapiRoutes);
+
+// ── Integrations ──────────────────────────────────────────────────────────────
+app.use('/api/integrations', integrationRoutes);
+app.use('/api/evolution',    evolutionRoutes);
+app.use('/api/lusha',        lushaRoutes);
+
+// ── Platform ──────────────────────────────────────────────────────────────────
+app.use('/api/dashboard',      dashboardRoutes);
+app.use('/api/calendar',       calendarRoutes);
+app.use('/api/meetings',       meetingRoutes);
+app.use('/api/notifications',  notificationRoutes);
+app.use('/api/ranking',        rankingRoutes);
+app.use('/api/reports',        performanceReportRoutes);
+app.use('/api/support',        supportRoutes);
+app.use('/api/webhooks',       webhookRoutes);
+
+// ── Billing ───────────────────────────────────────────────────────────────────
+app.use('/api/payments', paymentRoutes);
+app.use('/api/demo',     demoRoutes);
+app.use('/api/blog',     blogRoutes);
 
 app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
@@ -159,7 +218,9 @@ app.get('/health', (req, res) => {
 
 app.use(errorHandler);
 
-cron.schedule('* * * * *', () => {
+const isDev = process.env.NODE_ENV === 'development' || process.env.USE_MOCK_DATA === 'true';
+
+cron.schedule(isDev ? '*/5 * * * *' : '* * * * *', () => {
   followupService.checkAndSendFollowups();
   campaignFollowupService.processCampaignFollowups();
 });
@@ -168,10 +229,20 @@ cron.schedule('0 8 * * *', () => {
   performanceReportService.generateAndSendReports();
 }, { scheduled: true, timezone: "America/Sao_Paulo" });
 
-cron.schedule('*/10 * * * * *', () => {
+cron.schedule(isDev ? '*/10 * * * *' : '*/10 * * * * *', () => {
   leadLifecycleService.processInactiveLeads();
 }, { scheduled: true, timezone: "America/Sao_Paulo" });
 
-server.listen(PORT,  '0.0.0.0',() => {
+// Rotina de Cobrança (Diária às 09:00)
+cron.schedule('0 9 * * *', () => {
+  debtAutomationService.processBillingRoutine();
+}, { scheduled: true, timezone: "America/Sao_Paulo" });
+
+const serverInstance = server.listen(PORT,  '0.0.0.0',() => {
   logger.info(`Servidor rodando na porta ${PORT}`);
 });
+
+// Aumenta o timeout para 10 minutos para processar planilhas grandes
+serverInstance.timeout = 600000;
+serverInstance.keepAliveTimeout = 610000;
+serverInstance.headersTimeout = 620000;

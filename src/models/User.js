@@ -323,6 +323,10 @@ Exemplo de abordagem inicial:
   isActive: {
     type: Boolean,
     default: true
+  },
+  oneSignalSubscriptionId: {
+    type: String,
+    trim: true
   }
 }, {
   timestamps: true

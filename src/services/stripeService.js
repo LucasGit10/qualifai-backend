@@ -64,8 +64,8 @@ class StripeService {
       customer: customer.id,
       line_items: [{ price: plan.priceId, quantity: 1 }],
       mode: 'subscription',
-      success_url: `${'https://www.qualifai.tech'}/app/dashboard?stripe_success=true`,
-      cancel_url: `${'https://www.qualifai.tech'}/signature`,
+      success_url: `${process.env.APP_URL || process.env.FRONTEND_URL || 'https://www.qualifai.tech'}/app/dashboard?stripe_success=true`,
+      cancel_url: `${process.env.APP_URL || process.env.FRONTEND_URL || 'https://www.qualifai.tech'}/signature`,
       metadata: {
         userId: user._id.toString(),
         planId: planId,
@@ -96,7 +96,7 @@ class StripeService {
     }
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: user.stripe.customerId,
-      return_url: `${'https://www.qualifai.tech'}/app/profile-user`,
+      return_url: `${process.env.APP_URL || process.env.FRONTEND_URL || 'https://www.qualifai.tech'}/app/profile-user`,
     });
     return portalSession;
   }

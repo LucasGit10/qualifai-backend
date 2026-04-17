@@ -11,55 +11,45 @@ async function seedAdmin() {
   await connectDB();
 
   try {
-    const adminExists = await User.findOne({ role: 'admin' });
-    const lockFileExists = fs.existsSync(lockFilePath);
 
-    if (adminExists && !lockFileExists) {
-      fs.writeFileSync(lockFilePath, JSON.stringify({
-        createdAt: new Date().toISOString(),
-        info: 'Lock criado automaticamente pois admin já existe'
-      }, null, 2));
-      console.log('Arquivo lock criado automaticamente pois admin já existe.');
-      await mongoose.disconnect();
-      return;
-    }
+    const adminEmail = process.env.SEED_ADMIN_EMAIL || 'admin@qualifai.tech';
+    const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'Admin123@';
 
-    if (lockFileExists) {
-      console.log('Seed admin bloqueado pelo arquivo de lock. Nada a fazer.');
-      await mongoose.disconnect();
-      return;
-    }
-
-    if (!adminExists && !lockFileExists) {
-      const adminEmail = process.env.SEED_ADMIN_EMAIL;
-      const adminPassword = process.env.SEED_ADMIN_PASSWORD;
-
-      if (!adminEmail || !adminPassword) {
-        console.error('Por favor configure SEED_ADMIN_EMAIL e SEED_ADMIN_PASSWORD no .env');
-        process.exit(1);
+    const adminData = {
+      name: 'Administrador',
+      email: adminEmail,
+      password: adminPassword,
+      role: 'admin',
+      emailVerified: true,
+      isActive: true,
+      plan: 'pro',
+      settings: {
+        theme: 'dark',
+        aiConfig: {
+          agentName: 'QualifAI Manager',
+          communicationStyle: 'Normal',
+          personality: 'professional'
+        }
       }
+    };
 
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash(adminPassword, salt);
-
-      const adminUser = new User({
-        name: 'Administrador',
-        email: adminEmail,
-        password: hashedPassword,
-        role: 'admin',
-        emailVerified: true,
-        isActive: true,
-      });
-
+    let adminUser = await User.findOne({ email: adminEmail });
+    if (adminUser) {
+      console.log('Admin já existe. Atualizando dados...');
+      Object.assign(adminUser, adminData);
       await adminUser.save();
-
-      fs.writeFileSync(lockFilePath, JSON.stringify({
-        createdAt: new Date().toISOString(),
-        info: 'Seed admin criada com sucesso'
-      }, null, 2));
-
-      console.log('Admin criado com sucesso e seed bloqueado.');
+    } else {
+      console.log('Criando novo Admin...');
+      adminUser = new User(adminData);
+      await adminUser.save();
     }
+
+    fs.writeFileSync(lockFilePath, JSON.stringify({
+      createdAt: new Date().toISOString(),
+      info: 'Seed admin executado com sucesso'
+    }, null, 2));
+
+    console.log('Seed Admin concluído com sucesso.');
 
     await mongoose.disconnect();
 

@@ -10,7 +10,8 @@ class HubSpotService {
      */
     async exchangeCodeForTokens(code) {
         const { HUBSPOT_CLIENT_ID, HUBSPOT_CLIENT_SECRET } = process.env;
-        const redirectUri = `${process.env.BACKEND_URL || 'http://localhost:3001'}/api/integrations/hubspot/callback`;
+        const backendUrl = (process.env.BACKEND_URL || 'http://localhost:3001').replace(/\/api$/, '');
+        const redirectUri = `${backendUrl}/api/integrations/hubspot/callback`;
 
         if (!HUBSPOT_CLIENT_ID || !HUBSPOT_CLIENT_SECRET) {
             throw new Error('As credenciais do cliente HubSpot (ID e Secret) não estão configuradas no servidor.');

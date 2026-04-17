@@ -26,7 +26,8 @@ async function updateAllWebhooks() {
     
     for (const instance of instances) {
       const instanceName = instance.instanceName;
-      const webhookUrl = `${WEBHOOK_BASE_URL}/api/webhooks/evolution/${instanceName}`;
+      const normalizedBaseUrl = (WEBHOOK_BASE_URL || 'http://localhost:3001').replace(/\/api$/, '');
+      const webhookUrl = `${normalizedBaseUrl}/api/webhooks/evolution/${instanceName}`;
       
       try {
         //console.log(`📡 Updating: ${instanceName}`);
