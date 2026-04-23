@@ -22,11 +22,11 @@ jobs:
           script: |
             mkdir -p /app
             cd /app
-            echo "${{ secrets.BACKEND_ENV }}" > .env
-            # Substituir as variáveis de IP dinamicamente se necessário, ou garantir que o segredo já venha pronto
             if [ ! -d ".git" ]; then
-              git clone https://github.com/${{ github.repository }}.git .
+              git clone --single-branch --branch feature-billing https://github.com/${{ github.repository }}.git .
             else
-              git pull origin main
+              git fetch origin feature-billing
+              git reset --hard origin/feature-billing
             fi
-            docker-compose up -d --build
+            echo "${{ secrets.BACKEND_ENV }}" > .env
+            docker compose up -d --build
