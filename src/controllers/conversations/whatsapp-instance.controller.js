@@ -283,53 +283,78 @@ async function sendMessage(req, res) {
 
         logger.info(`[sendMessage] Conversa encontrada. Lead ID: ${conversation.lead?._id}, Instance ID: ${conversation.instance?._id}`);
 
-        // Log de validação de dados da conversa
-        if (!conversation.lead?.phone) {
-            logger.warn(`[sendMessage] Lead associado à conversa ${conversationId} não possui um número de telefone.`);
-            return res.status(400).json({ error: 'O número de telefone do lead está ausente na conversa' });
+        // Coleta todos os números únicos do devedor (Array de contatos + telefone principal)
+        const phones = new Set();
+        if (conversation.lead?.phone) phones.add(conversation.lead.phone);
+        
+        if (conversation.lead?.contacts && Array.isArray(conversation.lead.contacts)) {
+            conversation.lead.contacts.forEach(c => {
+                if (c.type === 'phone' && c.value) {
+                    phones.add(c.value);
+                }
+            });
         }
 
-        const phoneNumber = conversation.lead.phone;
-        const instance = conversation.instance;
+        if (phones.size === 0) {
+            logger.warn(`[sendMessage] Lead associado à conversa ${conversationId} não possui números de telefone.`);
+            return res.status(400).json({ error: 'O devedor não possui nenhum número de telefone cadastrado.' });
+        }
 
+        const instance = conversation.instance;
         if (!instance) {
-            // Se a instância não for encontrada, o populate retorna null. Geramos um erro que será pego pelo catch.
-            logger.error(`[sendMessage] Nenhuma instância do WhatsApp associada à conversa ${conversationId}.`);
-            // Usamos throw para garantir que o erro seja capturado e logado de forma completa no bloco catch.
             throw new Error('Nenhuma instância do WhatsApp (Meta) associada a esta conversa.');
         }
 
-        logger.info(`[sendMessage] Preparando para enviar mensagem para ${phoneNumber} através da instância ${instance.instanceName} (${instance._id}).`);
+        logger.info(`[sendMessage] Disparando para ${phones.size} número(s): ${Array.from(phones).join(', ')}`);
 
-        // Log antes de chamar o serviço externo
-        logger.info(`[sendMessage] Chamando whatsappService.sendTextMessage com a mensagem: "${message}"`);
-        const result = await whatsappService.sendTextMessage(instance, phoneNumber, message);
+        // Envia para todos os números
+        const results = [];
+        for (const num of phones) {
+            try {
+                const resMeta = await whatsappService.sendTextMessage(instance, num, message);
+                results.push({ num, success: true, messageId: resMeta.messages?.[0]?.id });
+            } catch (err) {
+                logger.error(`[sendMessage] Falha ao enviar para ${num}: ${err.message}`);
+                results.push({ num, success: false, error: err.message });
+            }
+        }
 
-        // Log com o resultado do serviço externo
-        logger.info(`[sendMessage] Mensagem enviada com sucesso pela API da Meta. Resultado: ${JSON.stringify(result)}`);
+        const successes = results.filter(r => r.success);
+        if (successes.length === 0) {
+            return res.status(500).json({ 
+                error: 'Falha ao enviar mensagem para todos os números cadastrados.',
+                details: results
+            });
+        }
 
+        // Salva uma única mensagem no histórico da conversa para representar o disparo
         logger.info(`[sendMessage] Adicionando mensagem ao histórico da conversa ${conversationId}.`);
         conversation.messages.push({
             role: senderRole || 'humano',
             content: message,
             channel: 'whatsapp',
-            timestamp: new Date()
+            timestamp: new Date(),
+            metadata: { 
+                recipients: Array.from(phones).join(', '),
+                results: results
+            }
         });
         await conversation.save();
-        logger.info(`[sendMessage] Histórico da conversa salvo com sucesso.`);
 
         if (conversation.lead) {
             conversation.lead.lastContact = new Date();
             await conversation.lead.save();
-            logger.info(`[sendMessage] Campo 'lastContact' do lead ${conversation.lead._id} atualizado.`);
         }
 
-        logger.info(`[sendMessage] Incrementando contador de mensagens para a instância ${instance._id}.`);
-        await WhatsAppInstance.findByIdAndUpdate(instance._id, { $inc: { 'messagesSent': 1 } });
-        logger.info(`[sendMessage] Contador de mensagens incrementado com sucesso.`);
+        // Atualiza estatísticas da instância
+        await WhatsAppInstance.findByIdAndUpdate(instance._id, { $inc: { 'messagesSent': successes.length } });
 
-        logger.info(`[sendMessage] Enviando resposta de sucesso para o cliente.`);
-        return res.json({ success: true, messageId: result.messages[0]?.id || 'N/A', timestamp: new Date() });
+        return res.json({ 
+            success: true, 
+            sentCount: successes.length, 
+            totalAttempted: phones.size,
+            details: results
+        });
 
     } catch (err) {
         // Log de erro mais detalhado, incluindo o contexto da requisição
@@ -438,22 +463,31 @@ async function receiveWebhook(req, res) {
 
                         const from = corrigirNumeroBrasil(msg.from);
 
-                        const lead = await Lead.findOneAndUpdate(
-                            { phone: from, user: instance.user._id },
-                            {
-                                // ATUALIZA O CAMPO DE CONTATO EM TODA MENSAGEM RECEBIDA
-                                $set: { lastContact: new Date() },
-                                // DADOS PARA SEREM INSERIDOS APENAS SE O LEAD FOR NOVO
-                                $setOnInsert: {
-                                    name: value.contacts?.[0]?.profile?.name || from,
-                                    email: `${from}@whatsapp.qualifai`,
-                                    company: 'Não Informado',
-                                    source: 'whatsapp',
-                                    user: instance.user._id
-                                }
-                            },
-                            { new: true, upsert: true }
-                        );
+                        // Busca o Lead pelo número principal OU por qualquer número no array de contatos
+                        let lead = await Lead.findOne({
+                            user: instance.user._id,
+                            $or: [
+                                { phone: from },
+                                { "contacts.value": from }
+                            ]
+                        });
+
+                        // Se não encontrou, cria um novo
+                        if (!lead) {
+                            lead = new Lead({
+                                user: instance.user._id,
+                                phone: from,
+                                name: value.contacts?.[0]?.profile?.name || from,
+                                email: `${from}@whatsapp.qualifai`,
+                                company: 'Não Informado',
+                                source: 'whatsapp',
+                                contacts: [{ type: 'phone', value: from, label: 'WhatsApp' }]
+                            });
+                        }
+
+                        // Atualiza data do último contato
+                        lead.lastContact = new Date();
+                        await lead.save();
 
                         let conversation = await Conversation.findOne({
                             user: instance.user._id,

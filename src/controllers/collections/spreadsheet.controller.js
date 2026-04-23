@@ -89,6 +89,7 @@ const col = (row, ...keys) => {
 /** Converte string de data para Date (suporta dd/mm/yyyy e yyyy-mm-dd) */
 const parseDate = (val) => {
   if (!val) return null;
+  if (val instanceof Date) return val; // Já é um objeto Date
   const s = String(val).trim();
   // YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return new Date(s);
@@ -107,13 +108,20 @@ const parseDate = (val) => {
 /** Converte string para decimal (suporta formato brasileiro e internacional) */
 const parseDecimal = (val) => {
   if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return val;
   let s = String(val).trim();
   
-  // Se tem vírgula e ponto, assumimos ponto=milhar, vírgula=decimal (Brasil)
+  // Se tem vírgula e ponto, descobrimos qual é o decimal
   if (s.includes(',') && s.includes('.')) {
-    s = s.replace(/\./g, '').replace(',', '.');
+    if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
+      // Formato BR: 1.234,56
+      s = s.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Formato US: 1,234.56
+      s = s.replace(/,/g, '');
+    }
   } else if (s.includes(',')) {
-    // Se só tem vírgula, trocamos por ponto para o parseFloat (ex: 10,00 -> 10.00)
+    // Só tem vírgula: assumimos decimal BR 1234,56
     s = s.replace(',', '.');
   }
   
@@ -123,11 +131,26 @@ const parseDecimal = (val) => {
   return isNaN(n) ? 0 : n;
 };
 
+const normalizePhone = (phone) => {
+  if (!phone) return null;
+  const clean = String(phone).replace(/\D/g, '');
+  if (!clean) return null;
+  
+  // Se tem 10 ou 11 dígitos, provavelmente é Brasil sem o 55
+  if (clean.length === 10 || clean.length === 11) {
+    return '55' + clean;
+  }
+  return clean;
+};
+
 /** Busca ou cria um Lead pelo CPF/CNPJ ou e-mail de forma atômica/robusta */
-const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, empresa }) => {
+const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefone2, empresa }) => {
   try {
     const docNorm = cpfCnpj ? cpfCnpj.replace(/\D/g, '') : null;
     const generatedEmail = email ? email.toLowerCase() : (docNorm ? `${docNorm}@importado.local` : null);
+
+    const phone1 = normalizePhone(telefone);
+    const phone2 = normalizePhone(telefone2);
 
     // Busca robusta: tenta por taxId (CPF/CNPJ) OU pelo e-mail gerado/fornecido
     let lead = await Lead.findOne({ 
@@ -138,25 +161,43 @@ const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, empres
       ]
     });
 
+    const newContacts = [];
+    if (phone1) newContacts.push({ type: 'phone', value: phone1, label: 'Telefone 1' });
+    if (phone2) newContacts.push({ type: 'phone', value: phone2, label: 'Telefone 2' });
+    if (email)   newContacts.push({ type: 'email', value: email.toLowerCase(), label: 'E-mail Planilha' });
+
     if (!lead) {
       lead = new Lead({
         user: userId,
         name: nome || cpfCnpj || 'Devedor Importado',
         email: generatedEmail || `extra_${Date.now()}@importado.local`,
         taxId: docNorm,
-        phone: telefone || null,
+        phone: phone1 || phone2 || null,
         company: empresa || 'Importado',
         source: 'form',
         status: 'novo',
+        tags: ['novo'],
+        contacts: newContacts
       });
       await lead.save();
     } else {
-      // Se encontrou mas estava sem telefone ou empresa, atualiza
+      // Se encontrou, atualiza os contatos principais se estiverem vazios
       let multiUpdate = false;
-      if (!lead.phone && telefone) { lead.phone = telefone; multiUpdate = true; }
+      if (!lead.phone && phone1) { lead.phone = phone1; multiUpdate = true; }
+      if (!lead.phone && phone2 && !phone1) { lead.phone = phone2; multiUpdate = true; }
       if (lead.company === 'Importado' && empresa) { lead.company = empresa; multiUpdate = true; }
       if (!lead.taxId && docNorm) { lead.taxId = docNorm; multiUpdate = true; }
       
+      // Adiciona novos contatos ao array sem duplicar o "value"
+      if (!lead.contacts) lead.contacts = [];
+      newContacts.forEach(nc => {
+        const exists = lead.contacts.some(c => c.value === nc.value);
+        if (!exists) {
+          lead.contacts.push(nc);
+          multiUpdate = true;
+        }
+      });
+
       if (multiUpdate) await lead.save();
     }
     return lead;
@@ -220,11 +261,12 @@ class SpreadsheetController {
             continue; // Ignora linha inválida
           }
 
-          // Busca ou Cria Lead
           const lead = await findOrCreateLead(userId, {
             cpfCnpj,
             nome: clienteNome,
-            telefone: col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular'),
+            email: col(row, 'E-mail', 'Email', 'EMAIL'),
+            telefone: col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
+            telefone2: col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
             empresa:  col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa'),
           });
 
@@ -258,37 +300,55 @@ class SpreadsheetController {
             rg:                  col(row, 'RG', 'Rg'),
             profissao:           col(row, 'Profissão', 'Profissao', 'PROFISSAO'),
             cpfCnpj,
-            telefone1:           col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular'),
+            telefone1:           col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
+            telefone2:           col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
             parcela,
             atraso:  parseInt(col(row, 'Atraso', 'ATRASO', 'Atraso (dias)') || '0') || 0,
             principal: parseDecimal(col(row, 'Principal', 'PRINCIPAL')),
             juros:     parseDecimal(col(row, 'Juros', 'Juros de Mora', 'JUROS')),
-            multa:     parseDecimal(col(row, 'Multa', 'MULTA')),
+                        multa:     parseDecimal(col(row, 'Multa', 'MULTA')),
             total:     parseDecimal(col(row, 'Total', 'TOTAL', 'Valor')),
           };
 
-          // Evitar inserções de objetos vazios se a query de match vier nula, mas a planilha geralmente é robusta
           if (vencimento) {
-             const existing = await InadimplenciaDetalhe.findOne(matchQuery);
-             if (existing) {
-               // Acumula campos financeiros (linhas com mesma chave mas valores diferentes na planilha)
-               existing.principal = (existing.principal || 0) + updateData.principal;
-               existing.juros     = (existing.juros     || 0) + updateData.juros;
-               existing.multa     = (existing.multa     || 0) + updateData.multa;
-               existing.total     = (existing.total     || 0) + updateData.total;
-               // Atualiza campos descritivos (não financeiros)
-               existing.importBatch   = updateData.importBatch;
-               existing.arquivoOrigem = updateData.arquivoOrigem;
-               existing.atraso        = updateData.atraso;
-               await existing.save();
-               updated++;
-             } else {
-               await InadimplenciaDetalhe.create({ ...matchQuery, ...updateData });
-               created++;
-             }
+            const existing = await InadimplenciaDetalhe.findOne(matchQuery);
+            if (existing) {
+                // Se for o MESMO batch de importação, nós SOMAMOS (para suportar múltiplas linhas do mesmo item na mesma planilha)
+                // Se for um batch DIFERENTE (ex: re-importação), nós SOBRESCREVEMOS (para atualizar com a planilha mais recente)
+                if (existing.importBatch === updateData.importBatch) {
+                    existing.principal = (existing.principal || 0) + updateData.principal;
+                    existing.juros     = (existing.juros || 0) + updateData.juros;
+                    existing.multa     = (existing.multa || 0) + updateData.multa;
+                    existing.total     = (existing.total || 0) + updateData.total;
+                } else {
+                    existing.principal = updateData.principal;
+                    existing.juros     = updateData.juros;
+                    existing.multa     = updateData.multa;
+                    existing.total     = updateData.total;
+                    
+                    // Atualiza campos descritivos
+                    existing.importBatch   = updateData.importBatch;
+                    existing.arquivoOrigem = updateData.arquivoOrigem;
+                    existing.atraso        = updateData.atraso;
+                    existing.cliente       = updateData.cliente;
+                    existing.empreendimento = updateData.empreendimento;
+                    existing.torre         = updateData.torre;
+                    existing.apto          = updateData.apto;
+                    existing.rf            = updateData.rf;
+                    existing.rg            = updateData.rg;
+                    existing.profissao     = updateData.profissao;
+                    existing.telefone1     = updateData.telefone1;
+                }
+
+              await existing.save();
+              updated++;
+            } else {
+              await InadimplenciaDetalhe.create({ ...matchQuery, ...updateData, tags: ['novo'] });
+              created++;
+            }
           } else {
-             console.warn(`[Import] Linha ${i + 1} sem data de vencimento válida.`);
-             errors++;
+            console.warn(`[Import] Linha ${i + 1} sem data de vencimento válida.`);
+            errors++;
           }
         } catch (e) {
           logger.error(`[Generic Import] Erro na linha ${i + 1}: ${e.message}`);
@@ -427,7 +487,9 @@ class SpreadsheetController {
             totalFuturo: 1,
             qtdVencidas: 1,
             charges: 1,
-            status: "$leadInfo.status"
+            status: "$leadInfo.status",
+            tags: "$leadInfo.tags",
+            contacts: "$leadInfo.contacts"
           }
         },
         { $sort: { totalVencido: -1 } }

@@ -56,9 +56,8 @@ const leadSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: [
-      'novo', 'contatado', 'em_negociacao', 'acordado',
-      'ativo', 'quitado', 'judicial',
-      'nao_respondeu', 'dispensou_ligacao'
+      'novo', 'contatado', 'em_negociacao', 'acordado', 'quitado',
+      'sem_resposta', 'dispensou_ligacao'
     ],
     default: 'novo'
   },
@@ -159,6 +158,12 @@ const leadSchema = new mongoose.Schema({
     state: String,
     zipCode: String
   },
+  contacts: [{
+    type: { type: String, enum: ['phone', 'email'] },
+    value: { type: String, trim: true },
+    label: String,
+    addedAt: { type: Date, default: Date.now }
+  }],
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

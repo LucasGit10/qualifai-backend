@@ -31,7 +31,7 @@ class LeadLifecycleService {
         const inactivityThreshold = new Date();
         inactivityThreshold.setSeconds(inactivityThreshold.getSeconds() - INACTIVITY_PERIOD_SECONDS);
         
-        const ignoredStatuses = ['frio', 'convertido', 'dispensou_ligacao'];
+        const ignoredStatuses = ['frio', 'convertido', 'dispensou_ligacao', 'novo'];
 
         // 3. QUERY ATUALIZADA: Adicionamos a condição para ignorar os leads em follow-up
         const result = await Lead.updateMany(
@@ -41,7 +41,7 @@ class LeadLifecycleService {
             lastContact: { $lt: inactivityThreshold },
             _id: { $nin: leadsInFollowUpIds } // <--- ESTA É A MUDANÇA CRÍTICA
           },
-          { $set: { status: 'nao_respondeu' } }
+          { $set: { status: 'sem_resposta' } }
         );
 
         if (result.modifiedCount > 0) {

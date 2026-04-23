@@ -352,6 +352,7 @@ class LeadController {
               phone: findProp(record, ['phone', 'telefone', 'celular']) || null,
               position: findProp(record, ['position', 'cargo']) || null,
               source: 'form',
+              tags: ['novo'],
             });
             existingEmails.add(email);
           }
@@ -447,6 +448,7 @@ class LeadController {
           phone: findProp(record, ['phone', 'telefone', 'celular']) || null,
           position: findProp(record, ['position', 'cargo']) || null,
           source: 'form',
+          tags: ['novo'],
         });
 
         await newLead.save();
@@ -539,8 +541,8 @@ class LeadController {
 
   async getLeadStatuses(req, res) {
     try {
-      // Pega os valores do 'enum' diretamente do Schema do Mongoose
-      const statuses = Lead.schema.path('status').enumValues;
+      // Retorna apenas os status desejados pelo usuário
+      const statuses = ['novo', 'contatado', 'em_negociacao', 'acordado', 'quitado'];
       res.json(statuses);
     } catch (error) {
       logger.error('Erro ao buscar lista de status:', error);

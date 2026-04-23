@@ -59,6 +59,7 @@ const inadimplenciaDetalheSchema = new mongoose.Schema({
     enum: ['pendente', 'pago', 'atrasado', 'negociado', 'cancelado'], 
     default: 'pendente' 
   },
+  tags: [String],
 
 }, { timestamps: true });
 
