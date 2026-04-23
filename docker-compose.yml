@@ -1,45 +1,14 @@
 version: '3.8'
 
 services:
-  mongodb:
-    image: mongo:latest
-    container_name: sdr-mongodb
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password123
-    volumes:
-      - mongodb_data:/data/db
-
   backend:
-    build: ./backend
+    build: .
     container_name: sdr-backend
     restart: unless-stopped
     ports:
-      - "3001:3001"
-    environment:
-      NODE_ENV: production
-      MONGODB_URI: mongodb://admin:password123@mongodb:27017/sdr-virtual?authSource=admin
-      JWT_SECRET: ${JWT_SECRET}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-    depends_on:
-      - mongodb
+      - "80:3001" # Mapeia a porta 80 do servidor para a 3001 do Node
+    env_file:
+      - .env
     volumes:
-      - ./backend:/app
+      - .:/app
       - /app/node_modules
-
-  frontend:
-    build: ./frontend
-    container_name: sdr-frontend
-    restart: unless-stopped
-    ports:
-      - "3000:80"
-    environment:
-      REACT_APP_API_URL: http://http://qualifai-alb-new-1345666069.us-east-1.elb.amazonaws.com:3001/api
-    depends_on:
-      - backend
-
-volumes:
-  mongodb_data:
