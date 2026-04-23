@@ -1,0 +1,32 @@
+name: Deploy Backend to DigitalOcean
+
+on:
+  push:
+    branches:
+      - feature-billing
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v3
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.DO_BACKEND_IP }}
+          username: root
+          key: ${{ secrets.DO_SSH_KEY }}
+          script: |
+            mkdir -p /app
+            cd /app
+            echo "${{ secrets.BACKEND_ENV }}" > .env
+            # Substituir as variáveis de IP dinamicamente se necessário, ou garantir que o segredo já venha pronto
+            if [ ! -d ".git" ]; then
+              git clone https://github.com/${{ github.repository }}.git .
+            else
+              git pull origin main
+            fi
+            docker-compose up -d --build
