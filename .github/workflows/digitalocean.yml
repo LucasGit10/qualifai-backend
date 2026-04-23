@@ -23,6 +23,7 @@ jobs:
             mkdir -p /app
             cd /app
             if [ ! -d ".git" ]; then
+              rm -rf ..?* .[!.]* * # Limpa arquivos ocultos e normais para o clone limpo
               git clone --single-branch --branch feature-billing https://github.com/${{ github.repository }}.git .
             else
               git fetch origin feature-billing
