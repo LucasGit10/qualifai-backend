@@ -17,5 +17,5 @@ COPY . .
 # Expose the API port
 EXPOSE 3001
 
-# Start development server with hot-reload (nodemon)
-CMD ["npm", "run", "dev"]
+# Start production server
+CMD ["npm", "start"]
