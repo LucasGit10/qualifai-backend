@@ -6,13 +6,50 @@ on:
       - feature-billing
   workflow_dispatch:
 
+# Permissões necessárias para publicar no GHCR
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  deploy:
+  build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      image_name: ${{ steps.prep.outputs.image_name }}
     steps:
       - name: Checkout do código
         uses: actions/checkout@v3
 
+      - name: Preparar nome da imagem
+        id: prep
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image_name=$REPO_LOWER" >> $GITHUB_OUTPUT
+          echo "IMAGE_NAME=$REPO_LOWER" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login no GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build e Push da imagem Docker
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ env.IMAGE_NAME }}-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v0.1.10
         with:
@@ -22,12 +59,32 @@ jobs:
           script: |
             mkdir -p /app
             cd /app
-            if [ ! -d ".git" ]; then
-              rm -rf ..?* .[!.]* * # Limpa arquivos ocultos e normais para o clone limpo
-              git clone --single-branch --branch feature-billing https://github.com/${{ github.repository }}.git .
-            else
-              git fetch origin feature-billing
-              git reset --hard origin/feature-billing
-            fi
+            
+            # Login no GHCR no Droplet
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
             echo "${{ secrets.BACKEND_ENV }}" > .env
-            docker compose up -d --build
+            
+            # --- CRIA O ARQUIVO DE PRODUÇÃO NA HORA ---
+            cat <<EOF > docker-compose.yml
+            services:
+              backend:
+                image: ghcr.io/${{ needs.build-and-push.outputs.image_name }}-backend:latest
+                container_name: qualifai-backend
+                restart: unless-stopped
+                ports:
+                  - "3001:3001"
+                env_file:
+                  - .env
+            EOF
+            
+            echo "Fazendo pull da imagem nova..."
+            docker compose pull
+            
+            echo "Subindo container..."
+            docker compose up -d --remove-orphans
+            
+            echo "Limpando imagens antigas..."
+            docker image prune -f
+            
+            docker ps
