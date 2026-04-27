@@ -62,8 +62,8 @@ class AuthController {
       // Armazena token JWT no cookie HTTP
       res.cookie('authToken', authToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax', // Changed from 'strict'
+        secure: false, // Alterado para permitir login via IP (HTTP)
+        sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000 // 7 dias em ms
       });
 
@@ -114,8 +114,8 @@ class AuthController {
   
       res.cookie('authToken', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax', // Changed from 'strict'
+        secure: false, // Alterado para permitir login via IP (HTTP)
+        sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000
       });
   
