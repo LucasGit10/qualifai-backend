@@ -73,7 +73,7 @@ jobs:
                 container_name: qualifai-backend
                 restart: unless-stopped
                 ports:
-                  - "3001:3001"
+                  - "80:3001"
                 env_file:
                   - .env
             EOF
