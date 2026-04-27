@@ -8,6 +8,7 @@
     "dev": "nodemon -L src/server.js",
     "test": "jest",
     "seed:admin": "node src/seed/seedAdmin.js",
+    "seed:manager": "node src/seed/seedManager.js",
     "seed:data": "node src/seed/seedData.js"
   },
   "dependencies": {
