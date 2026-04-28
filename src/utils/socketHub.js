@@ -13,7 +13,11 @@ module.exports = {
       'http://127.0.0.1:3000',
       'http://127.0.0.1:3001',
       'https://www.qualifai.tech',
-      'https://qualifai.tech'
+      'https://qualifai.tech',
+      'https://www.qualifaitech.com',
+      'https://qualifaitech.com',
+      'http://www.qualifaitech.com',
+      'http://qualifaitech.com'
     ];
 
     io = new Server(serverInstance, {

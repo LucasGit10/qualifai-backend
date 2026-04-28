@@ -84,6 +84,10 @@ const allowedOrigins = [
   'http://localhost:3002',
   'https://www.qualifai.tech',
   'https://qualifai.tech',
+  'https://www.qualifaitech.com',
+  'https://qualifaitech.com',
+  'http://www.qualifaitech.com',
+  'http://qualifaitech.com',
   'http://68.183.144.33', // IP do seu Frontend atual
   'http://qualifai-dev-alb-1329034245.us-east-1.elb.amazonaws.com',
 ];
