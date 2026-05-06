@@ -368,19 +368,29 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
   const { wabaId } = instance;
   const url = `https://graph.facebook.com/v19.0/${wabaId}/message_templates`;
 
-  const headerComponent = template.components.find(c => c.type === 'HEADER');
-  const isMediaHeader = headerComponent && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerComponent.format);
+  // Ordem rigorosa exigida pela Meta em alguns casos: HEADER, BODY, FOOTER, BUTTONS
+  const componentOrder = { 'HEADER': 1, 'BODY': 2, 'FOOTER': 3, 'BUTTONS': 4 };
+  const sortedComponents = [...template.components].sort((a, b) => {
+    return (componentOrder[a.type] || 99) - (componentOrder[b.type] || 99);
+  });
 
-  const cleanedComponents = template.components.map(comp => {
+  const cleanedComponents = sortedComponents.map(comp => {
     const { type, format, text, buttons } = comp.toObject ? comp.toObject() : comp; 
     
-    const cleanComp = { type };
-    
+    // Força o tipo para maiúsculo para evitar "invalid parameter" por casing
+    const cleanComp = { type: type.toUpperCase() };
+    const isMediaHeader = type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format);
+
     // Apenas HEADER pode ter o campo 'format'
     if (type === 'HEADER' && format) cleanComp.format = format;
     
-    // BODY, HEADER e FOOTER usam o campo 'text'
-    if (['BODY', 'HEADER', 'FOOTER'].includes(type) && text) cleanComp.text = text;
+    // BODY e FOOTER sempre usam 'text'. HEADER só usa 'text' se for format TEXT.
+    if (['BODY', 'FOOTER'].includes(type) && text) {
+      cleanComp.text = text.trim();
+    }
+    if (type === 'HEADER' && format === 'TEXT' && text) {
+      cleanComp.text = text.trim();
+    }
 
     if (type === 'HEADER') {
       if (isMediaHeader) {
@@ -390,13 +400,13 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
         cleanComp.example = {
           header_url: [sampleUrl] 
         };
-      } else if (text) {
+      } else if (format === 'TEXT' && text) {
         // Exemplo para HEADER de texto com variáveis
         const variableRegex = /\{\{([0-9]+)\}\}/g;
         const matches = text.match(variableRegex);
         if (matches) {
           cleanComp.example = {
-            header_text: ['Exemplo']
+            header_text: ['Exemplo'] // Cabeçalho usa array simples de strings
           };
         }
       }
@@ -409,19 +419,19 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
         const uniqueVariables = [...new Set(matches)];
         const exampleValues = uniqueVariables.map((_, index) => `Exemplo${index + 1}`); 
         cleanComp.example = {
-          body_text: [exampleValues] // Meta exige array de arrays
+          body_text: [exampleValues] // Corpo exige array de arrays
         };
       }
     }
 
-    if (buttons && buttons.length > 0) {
+    if (type === 'BUTTONS' && buttons && buttons.length > 0) {
       cleanComp.buttons = buttons.map(btn => {
         const cleanButton = {
-          type: btn.type,
-          text: btn.text
+          type: btn.type.toUpperCase(),
+          text: btn.text.trim()
         };
         if (btn.url) {
-          cleanButton.url = btn.url;
+          cleanButton.url = btn.url.trim();
           if (btn.url.includes('{{1}}')) {
              cleanButton.example = [
                 'https://qualifai.ai/exemplo'
