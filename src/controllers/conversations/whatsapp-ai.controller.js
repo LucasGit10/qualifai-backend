@@ -14,22 +14,42 @@ const buildTemplateComponents = (template, lead) => {
   const components = [];
 
   template.components.forEach(component => {
-    const componentPayload = { type: component.type.toLowerCase() };
+    const componentType = component.type.toLowerCase();
+    
+    // No momento, focamos em preencher variáveis de texto em BODY e HEADER
+    if (!['body', 'header'].includes(componentType)) return;
+
     const parameters = [];
+    const variableRegex = /\{\{([0-9]+)\}\}/g;
+    const textWithVars = component.text;
 
-    let textWithVars = component.text;
     if (textWithVars) {
-      if (textWithVars.includes('{{1}}')) {
-        parameters.push({ type: 'text', text: lead.name || 'Cliente' });
-      }
-      if (textWithVars.includes('{{2}}')) {
-        parameters.push({ type: 'text', text: lead.company || 'sua empresa' });
-      }
+      const matches = textWithVars.match(variableRegex);
+      if (matches) {
+        // Extrai os números das variáveis, remove duplicatas e ordena (Ex: {{1}}, {{2}}...)
+        const uniqueVars = [...new Set(matches)]
+          .map(m => parseInt(m.replace(/\{\{|\}\}/g, '')))
+          .sort((a, b) => a - b);
 
-      if (parameters.length > 0) {
-        componentPayload.parameters = parameters;
-        components.push(componentPayload);
+        uniqueVars.forEach(varNum => {
+          let value = '';
+          if (varNum === 1) {
+            value = lead.name || 'Cliente';
+          } else if (varNum === 2) {
+            value = lead.company || 'sua empresa';
+          } else {
+            value = `Dado_${varNum}`; // Fallback para variáveis adicionais
+          }
+          parameters.push({ type: 'text', text: value });
+        });
       }
+    }
+
+    if (parameters.length > 0) {
+      components.push({
+        type: componentType,
+        parameters: parameters
+      });
     }
   });
 

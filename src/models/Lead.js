@@ -57,7 +57,7 @@ const leadSchema = new mongoose.Schema({
     type: String,
     enum: [
       'novo', 'contatado', 'em_negociacao', 'acordado', 'quitado',
-      'sem_resposta', 'dispensou_ligacao'
+      'sem_resposta', 'dispensou_ligacao', 'arquivado'
     ],
     default: 'novo'
   },

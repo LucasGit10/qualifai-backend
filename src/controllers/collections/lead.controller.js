@@ -542,7 +542,7 @@ class LeadController {
   async getLeadStatuses(req, res) {
     try {
       // Retorna apenas os status desejados pelo usuário
-      const statuses = ['novo', 'contatado', 'em_negociacao', 'acordado', 'quitado'];
+      const statuses = ['novo', 'contatado', 'em_negociacao', 'acordado', 'quitado', 'sem_resposta', 'arquivado'];
       res.json(statuses);
     } catch (error) {
       logger.error('Erro ao buscar lista de status:', error);

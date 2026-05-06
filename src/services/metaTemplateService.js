@@ -4,10 +4,11 @@ const WhatsAppInstance = require('../models/WhatsAppInstance');
 
 function extractTemplateVariables(templateComponents) {
   const variables = [];
+  const variableRegex = /\{\{([0-9]+)\}\}/g;
   
   templateComponents.forEach(component => {
+    // Texto no BODY ou HEADER
     if (['BODY', 'HEADER'].includes(component.type) && component.text) {
-      const variableRegex = /\{\{([0-9]+)\}\}/g;
       const matches = component.text.match(variableRegex);
       if (matches) {
         matches.forEach(match => {
@@ -17,6 +18,23 @@ function extractTemplateVariables(templateComponents) {
           }
         });
       }
+    }
+    
+    // Variáveis em botões (ex: URL dinâmica)
+    if (component.type === 'BUTTONS' && component.buttons) {
+      component.buttons.forEach(btn => {
+        if (btn.url) {
+          const matches = btn.url.match(variableRegex);
+          if (matches) {
+            matches.forEach(match => {
+              const varNumber = match.replace(/\{\{|\}\}/g, '');
+              if (!variables.includes(varNumber)) {
+                variables.push(varNumber);
+              }
+            });
+          }
+        }
+      });
     }
   });
   
@@ -357,16 +375,31 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
     const { type, format, text, buttons } = comp.toObject ? comp.toObject() : comp; 
     
     const cleanComp = { type };
-    if (format) cleanComp.format = format;
-    if (text) cleanComp.text = text;
+    
+    // Apenas HEADER pode ter o campo 'format'
+    if (type === 'HEADER' && format) cleanComp.format = format;
+    
+    // BODY, HEADER e FOOTER usam o campo 'text'
+    if (['BODY', 'HEADER', 'FOOTER'].includes(type) && text) cleanComp.text = text;
 
-    if (type === 'HEADER' && isMediaHeader) {
-      if (!sampleUrl) {
-        throw new Error('Uma URL de exemplo é obrigatória para templates de mídia.');
+    if (type === 'HEADER') {
+      if (isMediaHeader) {
+        if (!sampleUrl) {
+          throw new Error('Uma URL de exemplo é obrigatória para templates de mídia.');
+        }
+        cleanComp.example = {
+          header_url: [sampleUrl] 
+        };
+      } else if (text) {
+        // Exemplo para HEADER de texto com variáveis
+        const variableRegex = /\{\{([0-9]+)\}\}/g;
+        const matches = text.match(variableRegex);
+        if (matches) {
+          cleanComp.example = {
+            header_text: ['Exemplo']
+          };
+        }
       }
-      cleanComp.example = {
-        header_url: [sampleUrl] 
-      };
     }
 
     if (type === 'BODY' && text) {
@@ -376,12 +409,12 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
         const uniqueVariables = [...new Set(matches)];
         const exampleValues = uniqueVariables.map((_, index) => `Exemplo${index + 1}`); 
         cleanComp.example = {
-          body_text: exampleValues 
+          body_text: [exampleValues] // Meta exige array de arrays
         };
       }
     }
 
-    if (buttons) {
+    if (buttons && buttons.length > 0) {
       cleanComp.buttons = buttons.map(btn => {
         const cleanButton = {
           type: btn.type,
@@ -391,7 +424,7 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
           cleanButton.url = btn.url;
           if (btn.url.includes('{{1}}')) {
              cleanButton.example = [
-                'valor_exemplo_url'
+                'https://qualifai.ai/exemplo'
              ];
           }
         }

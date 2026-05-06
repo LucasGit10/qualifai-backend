@@ -33,13 +33,25 @@ class LeadLifecycleService {
         
         const ignoredStatuses = ['frio', 'convertido', 'dispensou_ligacao', 'novo'];
 
-        // 3. QUERY ATUALIZADA: Adicionamos a condição para ignorar os leads em follow-up
+        // 3. NOVA LÓGICA: Arquivar quem já quitou e mudar status de quem não respondeu
+        
+        // 3a. Limpeza de quem já quitou -> Arquivar
+        await Lead.updateMany(
+          {
+            user: userId,
+            status: 'quitado',
+            lastContact: { $lt: inactivityThreshold }
+          },
+          { $set: { status: 'arquivado' } }
+        );
+
+        // 3b. Limpeza de quem não respondeu -> Mudar status
         const result = await Lead.updateMany(
           {
             user: userId,
-            status: { $nin: ignoredStatuses },
+            status: { $nin: [...ignoredStatuses, 'quitado', 'arquivado'] },
             lastContact: { $lt: inactivityThreshold },
-            _id: { $nin: leadsInFollowUpIds } // <--- ESTA É A MUDANÇA CRÍTICA
+            _id: { $nin: leadsInFollowUpIds }
           },
           { $set: { status: 'sem_resposta' } }
         );

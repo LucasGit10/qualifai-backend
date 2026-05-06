@@ -19,8 +19,12 @@ class DashboardController {
       const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
       // Total de leads (all-time) for the card
+      // Total de leads (ativos na base)
+      const activeStatusFilter = { $nin: ['arquivado', 'sem_resposta', 'frio'] };
+      
       const totalLeads = await Lead.countDocuments({ 
         user: userId,
+        status: activeStatusFilter
       });
 
       // Leads from this month (for conversion rate calculation)
@@ -52,9 +56,15 @@ class DashboardController {
       // Qualified leads count is still useful for other parts, so we keep it,
       // but conversionRate will be redefined below based on financial data.
 
-      // Leads por status
+      // Leads por status (apenas ativos)
       const leadsByStatus = await Lead.aggregate([
-        { $match: { user: userId, createdAt: { $gte: startOfMonth, $lte: endOfMonth } } },
+        { 
+          $match: { 
+            user: userId, 
+            status: { $nin: ['arquivado', 'sem_resposta'] },
+            createdAt: { $gte: startOfMonth, $lte: endOfMonth } 
+          } 
+        },
         { $group: { _id: '$status', count: { $sum: 1 } } }
       ]);
 
