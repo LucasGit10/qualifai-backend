@@ -40,6 +40,38 @@ const detectSeparator = (filePath) => new Promise((resolve) => {
 });
 
 /** Lê registros de um arquivo (CSV ou Excel) */
+const normalizeKey = (k) => String(k || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s/g, '');
+
+const findSpreadsheetHeaderIndex = (rows) => rows.findIndex((row) => {
+  const normalized = (row || []).map(normalizeKey).filter(Boolean);
+  const hasDebtor = ['cliente', 'cpf/cnpj', 'cpf', 'cnpj', 'documento'].some((key) => normalized.includes(normalizeKey(key)));
+  const coreCount = ['vencimento', 'principal', 'total'].filter((key) => normalized.includes(normalizeKey(key))).length;
+  return hasDebtor && coreCount >= 2;
+});
+
+const rowsToObjectsFromDetectedHeader = (rows, sheetName) => {
+  const headerIndex = findSpreadsheetHeaderIndex(rows);
+  if (headerIndex === -1) {
+    logger.warn(`[Spreadsheet] Aba ${sheetName} ignorada: cabeçalho Cliente/Vencimento/Principal/Total não encontrado.`);
+    return [];
+  }
+
+  const headers = rows[headerIndex].map((header, index) => {
+    const name = String(header || '').trim();
+    return name || `__EMPTY_${index}`;
+  });
+
+  return rows.slice(headerIndex + 1).reduce((items, row) => {
+    if (!row || row.every((value) => value === null || value === undefined || value === '')) return items;
+    const item = {};
+    headers.forEach((header, index) => {
+      if (!header.startsWith('__EMPTY_')) item[header] = row[index] ?? null;
+    });
+    if (col(item, 'Cliente', 'CPF/CNPJ', 'CPF', 'CNPJ', 'Documento')) items.push(item);
+    return items;
+  }, []);
+};
+
 const readFileRecords = async (filePath, fileExt) => {
   if (fileExt === '.csv') {
     const separator = await detectSeparator(filePath);
@@ -53,12 +85,13 @@ const readFileRecords = async (filePath, fileExt) => {
     });
     return records;
   } else if (['.xlsx', '.xls'].includes(fileExt)) {
-    const workbook = xlsx.readFile(filePath);
+    const workbook = xlsx.readFile(filePath, { cellDates: true });
     let allRecords = [];
     
     // Percorre todas as abas da planilha
     workbook.SheetNames.forEach(sheetName => {
-      const sheetRecords = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: null });
+      const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: null, blankrows: false });
+      const sheetRecords = rowsToObjectsFromDetectedHeader(rows, sheetName);
       if (Array.isArray(sheetRecords)) {
         allRecords = allRecords.concat(sheetRecords);
       }
@@ -70,7 +103,6 @@ const readFileRecords = async (filePath, fileExt) => {
 };
 
 /** Normaliza nome de coluna para comparação robusta: remove espaços, acento e case */
-const normalizeKey = (k) => k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s/g, '');
 
 const col = (row, ...keys) => {
   const rowKeys = Object.keys(row);
@@ -290,6 +322,11 @@ class SpreadsheetController {
     try {
       const records = await readFileRecords(filePath, fileExt);
       console.log(`[Import] Arquivo lido. Total de linhas: ${records.length}`);
+      if (!records.length) {
+        return res.status(400).json({
+          message: 'Nenhuma linha válida encontrada. Verifique se a planilha tem colunas Cliente, Vencimento, Principal e Total.'
+        });
+      }
       
       const io = req.app.get('io');
       const previousRows = await InadimplenciaDetalhe.find({
