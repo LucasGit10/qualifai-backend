@@ -112,7 +112,10 @@ const col = (row, ...keys) => {
     const normRowKey = normalizeKey(rowKey);
     if (normalizedKeys.includes(normRowKey)) {
       const val = row[rowKey];
-      if (val !== undefined && val !== null && val !== '') return String(val).trim();
+      if (val === undefined || val === null || val === '') continue;
+      if (val instanceof Date || typeof val === 'number') return val;
+      const text = String(val).trim();
+      if (text) return text;
     }
   }
   return null;
@@ -122,6 +125,10 @@ const col = (row, ...keys) => {
 const parseDate = (val) => {
   if (!val) return null;
   if (val instanceof Date) return val; // Já é um objeto Date
+  if (typeof val === 'number') {
+    const d = new Date((val - 25569) * 86400 * 1000);
+    return isNaN(d.getTime()) ? null : d;
+  }
   const s = String(val).trim();
   // YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return new Date(s);
@@ -371,6 +378,12 @@ class SpreadsheetController {
           if (!clienteNome && !cpfCnpj) {
             errors++;
             continue; // Ignora linha inválida
+          }
+
+          if (!vencimento) {
+            console.warn(`[Import] Linha ${i + 1} sem data de vencimento valida.`);
+            errors++;
+            continue;
           }
 
           const debtorImportKey = getDebtorImportKey({ cpfCnpj, cliente: clienteNome });
