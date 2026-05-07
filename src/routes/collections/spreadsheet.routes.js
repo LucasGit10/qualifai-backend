@@ -28,6 +28,8 @@ router.post('/import/generic', auth, upload.single('file'), spreadsheetControlle
 
 // ── Semestre / Batches ──────────────────────────────────────────────────────────
 router.get('/debtors',       auth, spreadsheetController.getDebtorsSummary);
+router.get('/totals',         auth, spreadsheetController.getCarteiraTotals);
+
 router.get('/export/debtors', auth, spreadsheetController.exportDebtorsReport);
 router.get('/by-month',       auth, spreadsheetController.getByMonth);
 router.get('/import-batches', auth, spreadsheetController.getImportBatches);

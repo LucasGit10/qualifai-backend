@@ -542,9 +542,38 @@ class SpreadsheetController {
         if (io) io.emit('spreadsheet-progress', { percent: 90, current: records.length, total: records.length, status: 'extraindo' });
 
         // ── PASSO 4: Persiste em batch ──────────────────────────────────────────────────
+        // Mapa de remapeamento: tempId -> realId para leads que falharam E11000
+        const leadIdRemap = new Map();
+
         if (leadsToCreate.length > 0) {
-          try { await Lead.insertMany(leadsToCreate, { ordered: false }); }
-          catch (e) { if (e.code !== 11000) throw e; }
+          try {
+            await Lead.insertMany(leadsToCreate, { ordered: false });
+          } catch (e) {
+            if (e.code !== 11000 && !e.writeErrors) throw e;
+            // Alguns leads já existiam (E11000) — remapeia o tempId para o _id real
+            // caso contrário as dívidas ficam apontando para ObjectId fantasma (lead=null efetivo)
+            const failedLeads = e.writeErrors
+              ? e.writeErrors.map(we => leadsToCreate[we.index]).filter(Boolean)
+              : leadsToCreate;
+            for (const fl of failedLeads) {
+              const tempId = String(fl._id);
+              const realLead = fl.taxId
+                ? await Lead.findOne({ user: new ObjectId(userId), taxId: fl.taxId }).select('_id').lean()
+                : await Lead.findOne({ user: new ObjectId(userId), email: fl.email }).select('_id').lean();
+              if (realLead) leadIdRemap.set(tempId, realLead._id);
+            }
+          }
+        }
+
+        // Corrige insertOne que apontam para tempIds que não foram salvos (E11000)
+        if (leadIdRemap.size > 0) {
+          logger.info('[importGeneric] Remapeando ' + leadIdRemap.size + ' lead(s) temporários para IDs reais.');
+          for (const op of debtBulkOps) {
+            if (op.insertOne) {
+              const tid = String(op.insertOne.document.lead);
+              if (leadIdRemap.has(tid)) op.insertOne.document.lead = leadIdRemap.get(tid);
+            }
+          }
         }
 
         const BATCH = 500;
@@ -569,19 +598,35 @@ class SpreadsheetController {
 
         newDebtors = [...currentDebtorKeys].filter(k => !previousDebtors.has(k)).length;
 
-        const totalImportado = await InadimplenciaDetalhe.aggregate([
-          { $match: { user: new ObjectId(userId), importBatch } },
-          { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
+        // ── Totais reais da carteira completa (não apenas do batch atual) ──────
+        const [totaisBatch, totaisCarteira] = await Promise.all([
+          // Soma apenas do batch importado agora (novos + atualizados)
+          InadimplenciaDetalhe.aggregate([
+            { $match: { user: new ObjectId(userId), importBatch } },
+            { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
+          ]),
+          // Soma total real da carteira (todos status exceto pago)
+          InadimplenciaDetalhe.aggregate([
+            { $match: { user: new ObjectId(userId), status: { $ne: 'pago' } } },
+            { $group: { _id: null, soma: { $sum: '$total' }, somaPrincipal: { $sum: '$principal' }, count: { $sum: 1 } } }
+          ])
         ]);
-        const somaImportada = totalImportado[0] ? totalImportado[0].soma : 0;
-        const countImportado = totalImportado[0] ? totalImportado[0].count : 0;
 
-        logger.info('[importGeneric] DONE: created=' + created + ' updated=' + updated + ' errors=' + errors + ' soma=R$' + somaImportada.toFixed(2) + ' count=' + countImportado + ' leads_novos=' + leadsToCreate.length);
+        const somaImportada    = totaisBatch[0]     ? totaisBatch[0].soma     : 0;
+        const countImportado   = totaisBatch[0]     ? totaisBatch[0].count    : 0;
+        const somaCarteira     = totaisCarteira[0]  ? totaisCarteira[0].soma  : 0;
+        const somaPrincipal    = totaisCarteira[0]  ? totaisCarteira[0].somaPrincipal : 0;
+        const countCarteira    = totaisCarteira[0]  ? totaisCarteira[0].count : 0;
+
+        logger.info('[importGeneric] DONE: created=' + created + ' updated=' + updated + ' errors=' + errors + ' somaCarteira=R$' + somaCarteira.toFixed(2) + ' somaBatch=R$' + somaImportada.toFixed(2) + ' count=' + countImportado + ' leads_novos=' + leadsToCreate.length);
         if (io) io.emit('spreadsheet-progress', { percent: 100, status: 'finalizado' });
         if (io) io.emit('spreadsheet-done', {
           success: true, importBatch, created, updated, errors,
           total: records.length, newDebtors, exitedDebtors, skippedDuplicates,
-          somaImportada: parseFloat(somaImportada.toFixed(2)), countImportado
+          somaImportada: parseFloat(somaImportada.toFixed(2)), countImportado,
+          somaCarteira: parseFloat(somaCarteira.toFixed(2)),
+          somaPrincipal: parseFloat(somaPrincipal.toFixed(2)),
+          countCarteira
         });
       } catch (e) {
         logger.error('[importGeneric] Erro critico no background: ' + e.message);
@@ -652,6 +697,51 @@ class SpreadsheetController {
   }
   
   // â”€â”€ 4b. Listar Devedores agrupados por Lead (Consolidado) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 4a2. Totais reais da carteira (sem depender de lead) ──────────────────
+  async getCarteiraTotals(req, res) {
+    try {
+      const userId = req.user.id;
+      const uid = new (require('mongoose').Types.ObjectId)(userId);
+      const today = new Date();
+
+      const [totais, porStatus, nullLeadInfo] = await Promise.all([
+        InadimplenciaDetalhe.aggregate([
+          { $match: { user: uid, status: { $ne: 'pago' } } },
+          { $group: {
+            _id: null,
+            somaTotal:     { $sum: '$total' },
+            somaPrincipal: { $sum: '$principal' },
+            somaVencido:   { $sum: { $cond: [{ $lte: ['$vencimento', today] }, '$total', 0] } },
+            somaFuturo:    { $sum: { $cond: [{ $gt: ['$vencimento', today] }, '$total', 0] } },
+            count:         { $sum: 1 },
+          }}
+        ]),
+        InadimplenciaDetalhe.aggregate([
+          { $match: { user: uid, status: { $ne: 'pago' } } },
+          { $group: { _id: '$importStatus', soma: { $sum: '$total' }, count: { $sum: 1 } } }
+        ]),
+        InadimplenciaDetalhe.aggregate([
+          { $match: { user: uid, lead: null, status: { $ne: 'pago' } } },
+          { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
+        ])
+      ]);
+
+      res.json({
+        somaTotal:     totais[0] ? totais[0].somaTotal     : 0,
+        somaPrincipal: totais[0] ? totais[0].somaPrincipal : 0,
+        somaVencido:   totais[0] ? totais[0].somaVencido   : 0,
+        somaFuturo:    totais[0] ? totais[0].somaFuturo    : 0,
+        count:         totais[0] ? totais[0].count         : 0,
+        nullLeadCount: nullLeadInfo[0] ? nullLeadInfo[0].count : 0,
+        nullLeadSoma:  nullLeadInfo[0] ? nullLeadInfo[0].soma  : 0,
+        porImportStatus: porStatus
+      });
+    } catch (e) {
+      logger.error('[getCarteiraTotals] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
+
   async getDebtorsSummary(req, res) {
     try {
       const userId = req.user.id;
