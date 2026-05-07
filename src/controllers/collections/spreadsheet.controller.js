@@ -731,25 +731,82 @@ class SpreadsheetController {
   async clearData(req, res) {
     try {
       const userId = req.user.id;
+      const mongoose = require('mongoose');
+      const uid = new mongoose.Types.ObjectId(userId);
       // Importações dinâmicas para evitar dependência circular se necessário
       const Lead = require('../../utils/modelProvider').getModel('Lead');
       const InadimplenciaDetalhe = require('../../utils/modelProvider').getModel('InadimplenciaDetalhe');
+      const Debt = require('../../utils/modelProvider').getModel('Debt');
+      const Installment = require('../../utils/modelProvider').getModel('Installment');
+      const Guarantor = require('../../utils/modelProvider').getModel('Guarantor');
       
       logger.info(`[Spreadsheet] Limpando base de dados para usuário: ${userId}`);
       console.log(`--- [BACKEND] Limpando base para: ${userId} ---`);
       
-      const resLeads = await Lead.deleteMany({ user: userId });
-      console.log(`--- [BACKEND] Leads deletados: ${resLeads.deletedCount}`);
-      const resDebts = await InadimplenciaDetalhe.deleteMany({ user: userId });
-      console.log(`--- [BACKEND] Dívidas deletadas: ${resDebts.deletedCount}`);
+      const [inadimplenciaLeadIds, contasLeadIds, spcLeadIds, debtDocs] = await Promise.all([
+        InadimplenciaDetalhe.distinct('lead', { user: uid, lead: { $ne: null } }),
+        ContasReceber.distinct('lead', { user: uid, lead: { $ne: null } }),
+        SpcRecord.distinct('lead', { user: uid, lead: { $ne: null } }),
+        Debt.find({ user: uid }).select('_id lead').lean()
+      ]);
+
+      const debtIds = debtDocs.map((debt) => debt._id);
+      const debtLeadIds = debtDocs.map((debt) => debt.lead).filter(Boolean);
+      const importedLeadIds = [
+        ...new Set([
+          ...inadimplenciaLeadIds,
+          ...contasLeadIds,
+          ...spcLeadIds,
+          ...debtLeadIds
+        ].filter(Boolean).map(String))
+      ].map((id) => new mongoose.Types.ObjectId(id));
+
+      const [
+        resInstallmentsByDebt,
+        resInstallmentsByUser,
+        resGuarantorsByDebt,
+        resGuarantorsByUser,
+        resDebt,
+        resInadimplencia,
+        resContasReceber,
+        resSpc
+      ] = await Promise.all([
+        debtIds.length ? Installment.deleteMany({ debt: { $in: debtIds } }) : Promise.resolve({ deletedCount: 0 }),
+        Installment.deleteMany({ user: uid }),
+        debtIds.length ? Guarantor.deleteMany({ debt: { $in: debtIds } }) : Promise.resolve({ deletedCount: 0 }),
+        Guarantor.deleteMany({ user: uid }),
+        Debt.deleteMany({ user: uid }),
+        InadimplenciaDetalhe.deleteMany({ user: uid }),
+        ContasReceber.deleteMany({ user: uid }),
+        SpcRecord.deleteMany({ user: uid })
+      ]);
+
+      const resImportedLeads = importedLeadIds.length
+        ? await Lead.deleteMany({ _id: { $in: importedLeadIds }, user: uid })
+        : { deletedCount: 0 };
+
+      const resOrphanImportedLeads = await Lead.deleteMany({
+        user: uid,
+        email: /@importado\.local$/i
+      });
+
+      const count = {
+        leads: resImportedLeads.deletedCount + resOrphanImportedLeads.deletedCount,
+        inadimplencia: resInadimplencia.deletedCount,
+        contasReceber: resContasReceber.deletedCount,
+        spc: resSpc.deletedCount,
+        debts: resDebt.deletedCount,
+        installments: resInstallmentsByDebt.deletedCount + resInstallmentsByUser.deletedCount,
+        guarantors: resGuarantorsByDebt.deletedCount + resGuarantorsByUser.deletedCount
+      };
+
+      logger.info('[Spreadsheet] Base de cobranca limpa:', count);
+      console.log('--- [BACKEND] Limpeza concluida:', count);
       
       res.json({
         success: true,
-        message: 'Base de dados limpa com sucesso.',
-        count: {
-          leads: resLeads.deletedCount,
-          debts: resDebts.deletedCount
-        }
+        message: 'Base de cobranca limpa com sucesso.',
+        count
       });
     } catch (error) {
       logger.error('[Spreadsheet] Erro ao limpar base:', error);
