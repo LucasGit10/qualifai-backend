@@ -1,15 +1,15 @@
 /**
  * spreadsheetController.js
- * ImportaÃ§Ã£o das 3 planilhas do sistema de cobranÃ§a:
+ * Importação das 3 planilhas do sistema de cobrança:
  *   1. SPC (SPC_MR, SPC_GT)
  *   2. Contas a Receber (MARCA_REGISTRADA, GRAN_TORO)
- *   3. InadimplÃªncia Detalhado (INADIMPLENCIA_DETALHADO, PLAN1)
+ *   3. Inadimplência Detalhado (INADIMPLENCIA_DETALHADO, PLAN1)
  *
- * EstratÃ©gia de vinculaÃ§Ã£o ao Lead:
+ * Estratégia de vinculação ao Lead:
  *   - SPC: usa NUMERO_DOCUMENTO (CPF/CNPJ) + EMAIL
  *   - Contas a Receber: usa CLIENTE (nome) + CONTRATO
- *   - InadimplÃªncia: usa CPF_CNPJ + CONTRATO
- *   Se o Lead nÃ£o for encontrado, cria um novo automaticamente.
+ *   - Inadimplência: usa CPF_CNPJ + CONTRATO
+ *   Se o Lead não for encontrado, cria um novo automaticamente.
  */
 
 const fs = require('fs');
@@ -39,7 +39,7 @@ const detectSeparator = (filePath) => new Promise((resolve) => {
   stream.on('error', () => resolve(','));
 });
 
-/** LÃª registros de um arquivo (CSV ou Excel) */
+/** Lê registros de um arquivo (CSV ou Excel) */
 const normalizeKey = (k) => String(k || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s/g, '');
 
 const findSpreadsheetHeaderIndex = (rows) => rows.findIndex((row) => {
@@ -52,7 +52,7 @@ const findSpreadsheetHeaderIndex = (rows) => rows.findIndex((row) => {
 const rowsToObjectsFromDetectedHeader = (rows, sheetName) => {
   const headerIndex = findSpreadsheetHeaderIndex(rows);
   if (headerIndex === -1) {
-    logger.warn(`[Spreadsheet] Aba ${sheetName} ignorada: cabeÃ§alho Cliente/Vencimento/Principal/Total nÃ£o encontrado.`);
+    logger.warn(`[Spreadsheet] Aba ${sheetName} ignorada: cabeçalho Cliente/Vencimento/Principal/Total não encontrado.`);
     return [];
   }
 
@@ -99,10 +99,10 @@ const readFileRecords = async (filePath, fileExt) => {
     
     return allRecords;
   }
-  throw new Error(`Formato nÃ£o suportado: ${fileExt}`);
+  throw new Error(`Formato não suportado: ${fileExt}`);
 };
 
-/** Normaliza nome de coluna para comparaÃ§Ã£o robusta: remove espaÃ§os, acento e case */
+/** Normaliza nome de coluna para comparação robusta: remove espaços, acento e case */
 
 const col = (row, ...keys) => {
   const rowKeys = Object.keys(row);
@@ -124,7 +124,7 @@ const col = (row, ...keys) => {
 /** Converte string de data para Date (suporta dd/mm/yyyy e yyyy-mm-dd) */
 const parseDate = (val) => {
   if (!val) return null;
-  if (val instanceof Date) return val; // JÃ¡ Ã© um objeto Date
+  if (val instanceof Date) return val; // Já é um objeto Date
   if (typeof val === 'number') {
     const d = new Date((val - 25569) * 86400 * 1000);
     return isNaN(d.getTime()) ? null : d;
@@ -135,7 +135,7 @@ const parseDate = (val) => {
   // DD/MM/YYYY
   const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
   if (m) return new Date(`${m[3]}-${m[2]}-${m[1]}`);
-  // NÃºmero serial do Excel
+  // Número serial do Excel
   const n = parseFloat(s);
   if (!isNaN(n) && n > 30000) {
     const d = new Date((n - 25569) * 86400 * 1000);
@@ -150,7 +150,7 @@ const parseDecimal = (val) => {
   if (typeof val === 'number') return val;
   let s = String(val).trim();
   
-  // Se tem vÃ­rgula e ponto, descobrimos qual Ã© o decimal
+  // Se tem vírgula e ponto, descobrimos qual é o decimal
   if (s.includes(',') && s.includes('.')) {
     if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
       // Formato BR: 1.234,56
@@ -160,11 +160,11 @@ const parseDecimal = (val) => {
       s = s.replace(/,/g, '');
     }
   } else if (s.includes(',')) {
-    // SÃ³ tem vÃ­rgula: assumimos decimal BR 1234,56
+    // Só tem vírgula: assumimos decimal BR 1234,56
     s = s.replace(',', '.');
   }
   
-  // Remove tudo que nÃ£o for dÃ­gito ou ponto ou sinal de menos
+  // Remove tudo que não for dígito ou ponto ou sinal de menos
   const clean = s.replace(/[^\d.-]/g, '');
   const n = parseFloat(clean);
   return isNaN(n) ? 0 : n;
@@ -175,7 +175,7 @@ const normalizePhone = (phone) => {
   const clean = String(phone).replace(/\D/g, '');
   if (!clean) return null;
   
-  // Se tem 10 ou 11 dÃ­gitos, provavelmente Ã© Brasil sem o 55
+  // Se tem 10 ou 11 dígitos, provavelmente é Brasil sem o 55
   if (clean.length === 10 || clean.length === 11) {
     return '55' + clean;
   }
@@ -249,7 +249,7 @@ const formatImportStatus = (status) => {
   return map[status] || 'Sem comparacao';
 };
 
-/** Busca ou cria um Lead pelo CPF/CNPJ ou e-mail de forma atÃ´mica/robusta */
+/** Busca ou cria um Lead pelo CPF/CNPJ ou e-mail de forma atômica/robusta */
 const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefone2, empresa }) => {
   try {
     const docNorm = cpfCnpj ? cpfCnpj.replace(/\D/g, '') : null;
@@ -310,9 +310,9 @@ const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefo
   } catch (e) {
     logger.warn(`[Spreadsheet] Erro ao processar lead (${cpfCnpj}): ${e.message}`);
     
-    // Fallback agressivo caso ainda dÃª conflito (ex: race condition em imports paralelos)
+    // Fallback agressivo caso ainda dê conflito (ex: race condition em imports paralelos)
     if (e.message && e.message.includes('E11000')) {
-      // Tenta pelo CPF/CNPJ primeiro (mais confiÃ¡vel, sempre presente na planilha)
+      // Tenta pelo CPF/CNPJ primeiro (mais confiável, sempre presente na planilha)
       const docNorm = cpfCnpj ? cpfCnpj.replace(/\D/g, '') : null;
       if (docNorm) {
         const byDoc = await Lead.findOne({ user: userId, taxId: docNorm });
@@ -338,9 +338,9 @@ const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefo
 
 class SpreadsheetController {
 
-  // â”€â”€ ImportaÃ§Ã£o GenÃ©rica de Planilha de CobranÃ§a (UPSERT) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ Importação Genérica de Planilha de Cobrança (UPSERT) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async importGeneric(req, res) {
-    if (!req.file) return res.status(400).json({ message: 'Arquivo Ã© obrigatÃ³rio.' });
+    if (!req.file) return res.status(400).json({ message: 'Arquivo é obrigatório.' });
     
     const userId = req.user.id;
     const filePath = req.file.path;
@@ -356,7 +356,7 @@ class SpreadsheetController {
       if (!records.length) {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         return res.status(400).json({
-          message: 'Nenhuma linha vÃ¡lida encontrada. Verifique se a planilha tem colunas Cliente, Vencimento, Principal e Total.'
+          message: 'Nenhuma linha válida encontrada. Verifique se a planilha tem colunas Cliente, Vencimento, Principal e Total.'
         });
       }
     } catch (readErr) {
@@ -364,9 +364,9 @@ class SpreadsheetController {
       return res.status(400).json({ message: `Erro ao ler o arquivo: ${readErr.message}` });
     }
 
-    // â”€â”€â”€ Responde IMEDIATAMENTE para nÃ£o sofrer timeout do proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â”€â”€â”€ Responde IMEDIATAMENTE para não sofrer timeout do proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // O processamento real roda em background e notifica via socket.io
-    res.status(202).json({ success: true, importBatch, total: records.length, message: 'ImportaÃ§Ã£o iniciada em background.' });
+    res.status(202).json({ success: true, importBatch, total: records.length, message: 'Importação iniciada em background.' });
 
     // â”€â”€â”€ Processamento em background â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // ─── Processamento em background (bulk) ─────────────────────────────────
@@ -698,7 +698,7 @@ class SpreadsheetController {
             charges: { $push: "$$ROOT" }
           }
         },
-        // Populate Lead status (O lead Ã© criado no importGeneric)
+        // Populate Lead status (O lead é criado no importGeneric)
         {
           $lookup: {
             from: 'leads',
@@ -744,7 +744,7 @@ class SpreadsheetController {
     }
   }
 
-  // â”€â”€ 5. Listar batches de importaÃ§Ã£o â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ 5. Listar batches de importação â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async getImportBatches(req, res) {
     try {
       const userId = req.user.id;
@@ -763,7 +763,7 @@ class SpreadsheetController {
     }
   }
 
-  // â”€â”€ 5. Limpar Base de Dados do UsuÃ¡rio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ 5. Limpar Base de Dados do Usuário â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async updateDebtorReportStatus(req, res) {
     try {
       const userId = req.user.id;
@@ -789,14 +789,14 @@ class SpreadsheetController {
       const userId = req.user.id;
       const mongoose = require('mongoose');
       const uid = new mongoose.Types.ObjectId(userId);
-      // ImportaÃ§Ãµes dinÃ¢micas para evitar dependÃªncia circular se necessÃ¡rio
+      // Importações dinâmicas para evitar dependência circular se necessário
       const Lead = require('../../utils/modelProvider').getModel('Lead');
       const InadimplenciaDetalhe = require('../../utils/modelProvider').getModel('InadimplenciaDetalhe');
       const Debt = require('../../utils/modelProvider').getModel('Debt');
       const Installment = require('../../utils/modelProvider').getModel('Installment');
       const Guarantor = require('../../utils/modelProvider').getModel('Guarantor');
       
-      logger.info(`[Spreadsheet] Limpando base de dados para usuÃ¡rio: ${userId}`);
+      logger.info(`[Spreadsheet] Limpando base de dados para usuário: ${userId}`);
       console.log(`--- [BACKEND] Limpando base para: ${userId} ---`);
       
       const [inadimplenciaLeadIds, contasLeadIds, spcLeadIds, debtDocs] = await Promise.all([
@@ -870,7 +870,7 @@ class SpreadsheetController {
     }
   }
 
-  // â”€â”€ 6. Exportar RelatÃ³rio de Devedores para PDF â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ 6. Exportar Relatório de Devedores para PDF â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async exportDebtorsReport(req, res) {
     try {
       const PDFDocument = require('pdfkit');
@@ -923,8 +923,8 @@ class SpreadsheetController {
       const secondaryColor = '#475569';
       const accentColor = '#ef4444';
 
-      // --- CabeÃ§alho ---
-      doc.fillColor(primaryColor).fontSize(24).font('Helvetica-Bold').text('QualifAI - RelatÃ³rio de CobranÃ§a', { align: 'center' });
+      // --- Cabeçalho ---
+      doc.fillColor(primaryColor).fontSize(24).font('Helvetica-Bold').text('QualifAI - Relatório de Cobrança', { align: 'center' });
       doc.fillColor(secondaryColor).fontSize(10).font('Helvetica').text(`Gerado em: ${format(new Date(), 'dd/mm/yyyy HH:mm:ss')}`, { align: 'center' });
       doc.moveDown(2);
 
@@ -1001,7 +1001,7 @@ class SpreadsheetController {
         doc.font('Helvetica').text(`Total Principal: ${formatMoney(d.totalPrincipal)}  |  Total Corrigido: ${formatMoney(d.totalGeral)}`, doc.x, doc.y + 5);
         doc.moveDown(2.5);
 
-        // HistÃ³rico
+        // Histórico
         doc.fillColor(primaryColor).fontSize(13).font('Helvetica-Bold').text('HISTÃ“RICO DE AÃ‡Ã•ES');
         doc.moveTo(doc.x, doc.y).lineTo(550, doc.y).stroke(primaryColor);
         doc.moveDown(0.8);
@@ -1017,9 +1017,9 @@ class SpreadsheetController {
         // Helper para formatar moeda no PDF
         const pdfFmt = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
         
-        // Helper para traduzir mÃ©todo de pagamento
+        // Helper para traduzir método de pagamento
         const translateMethod = (m) => {
-          const map = { 'transfer': 'TransferÃªncia', 'pix': 'PIX', 'boleto': 'Boleto', 'card': 'CartÃ£o', 'cash': 'Dinheiro' };
+          const map = { 'transfer': 'Transferência', 'pix': 'PIX', 'boleto': 'Boleto', 'card': 'Cartão', 'cash': 'Dinheiro' };
           return map[m] || 'Sistema';
         };
 
@@ -1074,7 +1074,7 @@ class SpreadsheetController {
             doc.moveDown(0.3);
           });
         } else {
-          doc.fillColor('#94a3b8').fontSize(10).font('Helvetica-Oblique').text('Nenhuma interaÃ§Ã£o registrada atÃ© o momento.');
+          doc.fillColor('#94a3b8').fontSize(10).font('Helvetica-Oblique').text('Nenhuma interação registrada até o momento.');
         }
 
         doc.moveDown(2);
@@ -1088,11 +1088,11 @@ class SpreadsheetController {
     }
   }
 
-  // â”€â”€ 7. DiagnÃ³stico de Duplicatas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ 7. Diagnóstico de Duplicatas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /**
    * GET /spreadsheets/diagnose-duplicates
-   * Retorna grupos de registros duplicados para o usuÃ¡rio autenticado.
-   * Duplicata: mesmo lead + contrato + dia de vencimento com mais de 1 registro nÃ£o pago.
+   * Retorna grupos de registros duplicados para o usuário autenticado.
+   * Duplicata: mesmo lead + contrato + dia de vencimento com mais de 1 registro não pago.
    */
   async diagnoseDuplicates(req, res) {
     try {
@@ -1147,7 +1147,7 @@ class SpreadsheetController {
     }
   }
 
-  // â”€â”€ 8. CorreÃ§Ã£o de Duplicatas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // â”€â”€ 8. Correção de Duplicatas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /**
    * POST /spreadsheets/fix-duplicates
    * Remove registros duplicados, mantendo o mais recente (por updatedAt) em cada grupo.
@@ -1183,7 +1183,7 @@ class SpreadsheetController {
         // Ordena do mais recente para o mais antigo
         const entries = group.ids.map((id, i) => ({ id, updatedAt: group.updatedAts[i] || new Date(0) }));
         entries.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-        // MantÃ©m o primeiro (mais recente), remove os demais
+        // Mantém o primeiro (mais recente), remove os demais
         entries.slice(1).forEach(e => idsToRemove.push(e.id));
       }
 
@@ -1193,7 +1193,7 @@ class SpreadsheetController {
 
       const result = await InadimplenciaDetalhe.deleteMany({ _id: { $in: idsToRemove } });
 
-      logger.info(`[fixDuplicates] Removidas ${result.deletedCount} duplicatas para usuÃ¡rio ${userId}`);
+      logger.info(`[fixDuplicates] Removidas ${result.deletedCount} duplicatas para usuário ${userId}`);
       res.json({
         success: true,
         removed: result.deletedCount,
