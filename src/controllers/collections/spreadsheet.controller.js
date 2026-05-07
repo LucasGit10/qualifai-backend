@@ -479,6 +479,11 @@ class SpreadsheetController {
                 lead: lead?._id,
                 contrato: contrato || '',
                 vencimento: { $gte: start, $lt: end },
+                // Inclui esp/elemento/parcela para ser preciso em casos de múltiplos lançamentos
+                // no mesmo dia/contrato, mas IGNORA taxaExtra (presente na inadimplência, ausente no detalhado)
+                esp: esp ?? null,
+                elemento: elemento ?? null,
+                parcela: parcela ?? null,
                 status: { $ne: 'pago' }
               });
             if (existing) {
@@ -512,7 +517,11 @@ class SpreadsheetController {
                 }
 
               existing.debtorImportKey = updateData.debtorImportKey;
-              existing.chargeImportKey = updateData.chargeImportKey;
+              // Só atualiza chargeImportKey se o registro não tinha um (encontrado via fallback de tolerância).
+              // Se já tem chargeImportKey, mantém o existente para evitar E11000 no índice único sparse.
+              if (!existing.chargeImportKey) {
+                existing.chargeImportKey = updateData.chargeImportKey;
+              }
               existing.importStatus = updateData.importStatus;
               existing.lastSeenBatch = updateData.lastSeenBatch;
               existing.exitedInBatch = null;
@@ -520,8 +529,30 @@ class SpreadsheetController {
               await existing.save();
               updated++;
             } else {
-              await InadimplenciaDetalhe.create({ ...matchQuery, ...updateData, firstSeenBatch: importBatch, tags: rowImportStatus === 'novo' ? ['novo'] : [] });
-              created++;
+              try {
+                await InadimplenciaDetalhe.create({ ...matchQuery, ...updateData, firstSeenBatch: importBatch, tags: rowImportStatus === 'novo' ? ['novo'] : [] });
+                created++;
+              } catch (createErr) {
+                if (createErr.code === 11000) {
+                  // chargeImportKey já existe — o registro foi criado por outra linha nesta mesma importação
+                  // Faz update no existente em vez de criar duplicata
+                  const dup = await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey: updateData.chargeImportKey });
+                  if (dup) {
+                    dup.total     = updateData.total;
+                    dup.principal = updateData.principal;
+                    dup.juros     = updateData.juros;
+                    dup.multa     = updateData.multa;
+                    dup.lastSeenBatch = importBatch;
+                    dup.importStatus  = updateData.importStatus;
+                    await dup.save();
+                    updated++;
+                  } else {
+                    skippedDuplicates++;
+                  }
+                } else {
+                  throw createErr;
+                }
+              }
             }
           } else {
             console.warn(`[Import] Linha ${i + 1} sem data de vencimento válida.`);
