@@ -634,7 +634,7 @@ class SpreadsheetController {
       const today = new Date();
 
       const pipeline = [
-        { $match: { user: uid, status: { $ne: 'pago' }, importStatus: { $ne: 'saiu' } } },
+        { $match: { user: uid, status: { $ne: 'pago' } } },
         { $sort: { updatedAt: -1 } },
         {
           $group: {
