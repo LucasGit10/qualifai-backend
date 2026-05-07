@@ -605,7 +605,17 @@ class SpreadsheetController {
 
       // Finaliza progresso
       if (io) io.emit('spreadsheet-progress', { percent: 100, status: 'finalizado' });
-      res.json({ success: true, importBatch, created, updated, errors, total: records.length, newDebtors, exitedDebtors, skippedDuplicates });
+      // Calcula o total efetivamente importado para diagnóstico
+      const totalImportado = await InadimplenciaDetalhe.aggregate([
+        { $match: { user: new (require('mongoose').Types.ObjectId)(userId), importBatch } },
+        { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
+      ]);
+      const somaImportada = totalImportado[0]?.soma || 0;
+      const countImportado = totalImportado[0]?.count || 0;
+
+      logger.info(`[importGeneric] Resultado: created=${created} updated=${updated} errors=${errors} skipped=${skippedDuplicates} total_registros=${records.length} soma_importada=R$${somaImportada.toFixed(2)} count_no_banco=${countImportado}`);
+
+      res.json({ success: true, importBatch, created, updated, errors, total: records.length, newDebtors, exitedDebtors, skippedDuplicates, somaImportada: parseFloat(somaImportada.toFixed(2)), countImportado });
     } catch (e) {
       logger.error('[importGeneric] Erro crítico:', e);
       res.status(500).json({ message: `Erro ao processar a planilha: ${e.message}` });
