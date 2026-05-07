@@ -310,9 +310,25 @@ const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefo
   } catch (e) {
     logger.warn(`[Spreadsheet] Erro ao processar lead (${cpfCnpj}): ${e.message}`);
     
-    // Fallback agressivo caso ainda dê conflito de e-mail (ex: race condition)
-    if (e.message.includes('E11000')) {
-       return await Lead.findOne({ user: userId, email: (email || '').toLowerCase() });
+    // Fallback agressivo caso ainda dê conflito (ex: race condition em imports paralelos)
+    if (e.message && e.message.includes('E11000')) {
+      // Tenta pelo CPF/CNPJ primeiro (mais confiável, sempre presente na planilha)
+      const docNorm = cpfCnpj ? cpfCnpj.replace(/\D/g, '') : null;
+      if (docNorm) {
+        const byDoc = await Lead.findOne({ user: userId, taxId: docNorm });
+        if (byDoc) return byDoc;
+      }
+      // Tenta pelo e-mail gerado automaticamente
+      const generatedEmail = email ? email.toLowerCase() : (docNorm ? `${docNorm}@importado.local` : null);
+      if (generatedEmail) {
+        const byEmail = await Lead.findOne({ user: userId, email: generatedEmail });
+        if (byEmail) return byEmail;
+      }
+      // Tenta pelo e-mail fornecido
+      if (email) {
+        const byOriginalEmail = await Lead.findOne({ user: userId, email: email.toLowerCase() });
+        if (byOriginalEmail) return byOriginalEmail;
+      }
     }
     return null;
   }
@@ -713,7 +729,7 @@ class SpreadsheetController {
             as: 'leadInfo'
           }
         },
-        { $unwind: "$leadInfo" },
+        { $unwind: { path: "$leadInfo", preserveNullAndEmptyArrays: true } },
         {
           $project: {
             _id: 1,
