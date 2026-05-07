@@ -55,7 +55,7 @@ function generateDefaultValues(variables, contactName = 'Cliente') {
   return values;
 }
 
-async function sendIndividualTemplateMessages(instance, templateName, phoneNumbers, templateComponents, contactNames = {}) {
+async function sendIndividualTemplateMessages(instance, templateName, phoneNumbers, templateComponents, contactNames = {}, mediaUrl = null) {
   if (!instance || !instance.apiCredentials?.token || !instance.phoneNumberId) {
     throw new Error('Credenciais da instância (Token, Phone Number ID) não encontradas.');
   }
@@ -64,7 +64,7 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
   const results = [];
   
   const variables = extractTemplateVariables(templateComponents);
-  logger.info(`[Template] Template "${templateName}" possui ${variables.length} variáveis, usando envio com parâmetros:`, variables);
+  logger.info(`[Template] Template "${templateName}" possui ${variables.length} variáveis, usando envio com parâmetros. MediaURL: ${mediaUrl ? 'Sim' : 'Não'}`);
   
   for (const phone of phoneNumbers) {
     let components = [];
@@ -74,24 +74,47 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
     try {
       const url = `https://graph.facebook.com/v19.0/${instance.phoneNumberId}/messages`; 
       
-      if (variables.length > 0) {
-        templateComponents.forEach(templateComp => {
-            const componentType = templateComp.type.toLowerCase();
-            const componentVariables = extractTemplateVariables([templateComp]); 
+      templateComponents.forEach(templateComp => {
+        const componentType = templateComp.type.toLowerCase();
+
+        // 1. Tratamento de Cabeçalho de Mídia (Opcional)
+        if (componentType === 'header' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(templateComp.format)) {
+            if (mediaUrl) {
+                const mediaType = templateComp.format.toLowerCase();
+                components.push({
+                    type: 'header',
+                    parameters: [
+                        {
+                            type: mediaType,
+                            [mediaType]: { link: mediaUrl }
+                        }
+                    ]
+                });
+            }
+        }
+
+        // 2. Tratamento de Variáveis de Texto (BODY e HEADER texto)
+        const componentVariables = extractTemplateVariables([templateComp]); 
+        if (componentVariables.length > 0) {
+            const parameters = componentVariables.map(varNum => ({
+                type: 'text',
+                text: defaultValues[varNum]
+            }));
             
-            if (componentVariables.length > 0) {
-                const parameters = componentVariables.map(varNum => ({
-                    type: 'text',
-                    text: defaultValues[varNum]
-                }));
-                
+            // Verifica se já existe um componente deste tipo (ex: header de mídia já adicionado)
+            // No caso de HEADER com texto E mídia, a Meta tem regras específicas, 
+            // mas aqui tratamos o caso mais comum: ou mídia ou texto com variável.
+            let existingComp = components.find(c => c.type === componentType);
+            if (existingComp) {
+                existingComp.parameters = [...existingComp.parameters, ...parameters];
+            } else {
                 components.push({
                     type: componentType,
                     parameters: parameters
                 });
             }
-        });
-      }
+        }
+      });
 
       const payload = {
         messaging_product: 'whatsapp',

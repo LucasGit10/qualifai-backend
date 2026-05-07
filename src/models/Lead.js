@@ -61,6 +61,11 @@ const leadSchema = new mongoose.Schema({
     ],
     default: 'novo'
   },
+  manualReportStatus: {
+    type: String,
+    trim: true,
+    maxlength: 120
+  },
   hubspot: {
     contactId: String,
     dealId: String,

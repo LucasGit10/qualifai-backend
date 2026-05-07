@@ -10,13 +10,30 @@ const oneSignalService = require('../../services/oneSignalService');
 const logger = require('../../utils/logger');
 
 // buildTemplateComponents (Mantido 100% - Sem alterações)
-const buildTemplateComponents = (template, lead) => {
+const buildTemplateComponents = (template, lead, mediaUrl = null) => {
   const components = [];
 
   template.components.forEach(component => {
     const componentType = component.type.toLowerCase();
     
-    // No momento, focamos em preencher variáveis de texto em BODY e HEADER
+    // 1. Tratamento de Cabeçalho de Mídia (Imagem, Vídeo, Documento)
+    if (componentType === 'header' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(component.format)) {
+      if (mediaUrl) {
+        const mediaType = component.format.toLowerCase();
+        components.push({
+          type: 'header',
+          parameters: [
+            {
+              type: mediaType,
+              [mediaType]: { link: mediaUrl }
+            }
+          ]
+        });
+      }
+      return;
+    }
+
+    // 2. Tratamento de Variáveis de Texto em BODY e HEADER
     if (!['body', 'header'].includes(componentType)) return;
 
     const parameters = [];
@@ -26,7 +43,6 @@ const buildTemplateComponents = (template, lead) => {
     if (textWithVars) {
       const matches = textWithVars.match(variableRegex);
       if (matches) {
-        // Extrai os números das variáveis, remove duplicatas e ordena (Ex: {{1}}, {{2}}...)
         const uniqueVars = [...new Set(matches)]
           .map(m => parseInt(m.replace(/\{\{|\}\}/g, '')))
           .sort((a, b) => a - b);
@@ -38,7 +54,7 @@ const buildTemplateComponents = (template, lead) => {
           } else if (varNum === 2) {
             value = lead.company || 'sua empresa';
           } else {
-            value = `Dado_${varNum}`; // Fallback para variáveis adicionais
+            value = `Dado_${varNum}`;
           }
           parameters.push({ type: 'text', text: value });
         });
@@ -46,10 +62,16 @@ const buildTemplateComponents = (template, lead) => {
     }
 
     if (parameters.length > 0) {
-      components.push({
-        type: componentType,
-        parameters: parameters
-      });
+      // Verifica se já existe um HEADER de mídia adicionado para anexar parâmetros extras se necessário
+      let existingComp = components.find(c => c.type === componentType);
+      if (existingComp) {
+        existingComp.parameters = [...existingComp.parameters, ...parameters];
+      } else {
+        components.push({
+          type: componentType,
+          parameters: parameters
+        });
+      }
     }
   });
 
@@ -95,9 +117,11 @@ class WhatsAppAIController {
   // startConversationWithTemplate (Mantido 100% - Sem alterações)
   startConversationWithTemplate = async (req, res) => {
     try {
-      const { leadId, instanceId, templateId } = req.body;
+      const { leadId, instanceId, templateId, mediaUrl, imageUrl } = req.body;
       const userId = req.user.id;
       
+      const finalMediaUrl = mediaUrl || imageUrl; // Suporta ambos os nomes de campo
+
       if (!leadId || !instanceId || !templateId) {
         return res.status(400).json({ message: 'leadId, instanceId e templateId são obrigatórios.' });
       }
@@ -111,7 +135,7 @@ class WhatsAppAIController {
       const template = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
       if (!template) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
 
-      const components = buildTemplateComponents(template, lead);
+      const components = buildTemplateComponents(template, lead, finalMediaUrl);
 
       const conversation = new Conversation({
         lead: leadId,

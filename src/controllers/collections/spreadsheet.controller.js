@@ -143,6 +143,40 @@ const normalizePhone = (phone) => {
   return clean;
 };
 
+const normalizeText = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase();
+
+const normalizeDocument = (value) => {
+  const clean = String(value || '').replace(/\D/g, '');
+  return clean || null;
+};
+
+const getDebtorImportKey = ({ cpfCnpj, cliente, lead }) => {
+  const doc = normalizeDocument(cpfCnpj);
+  if (doc) return `doc:${doc}`;
+  const name = normalizeText(cliente);
+  if (name) return `nome:${name}`;
+  return lead ? `lead:${lead}` : null;
+};
+
+const getDebtorImportKeyFromRow = (row) => getDebtorImportKey({
+  cpfCnpj: col(row, 'CPF/CNPJ', 'CPF', 'CNPJ', 'cpfCnpj', 'Documento'),
+  cliente: col(row, 'Cliente', 'CLIENTE', 'NOME', 'Razao', 'Nome do Cliente')
+});
+
+const formatImportStatus = (status) => {
+  const map = {
+    novo: 'Novo na importacao',
+    mantido: 'Permanece na importacao',
+    saiu: 'Saiu da importacao'
+  };
+  return map[status] || 'Sem comparacao';
+};
+
 /** Busca ou cria um Lead pelo CPF/CNPJ ou e-mail de forma atômica/robusta */
 const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefone2, empresa }) => {
   try {
@@ -224,14 +258,27 @@ class SpreadsheetController {
     const filePath = req.file.path;
     const fileExt = path.extname(req.file.originalname).toLowerCase();
     const arquivoOrigem = req.body.arquivoOrigem || req.file.originalname;
-    const importBatch = `${new Date().toISOString().slice(0, 10)}_${req.file.originalname}`;
+    const importBatch = `${new Date().toISOString().replace(/[:.]/g, '-')}_${req.file.originalname}`;
 
     try {
       const records = await readFileRecords(filePath, fileExt);
       console.log(`[Import] Arquivo lido. Total de linhas: ${records.length}`);
       
       const io = req.app.get('io');
-      let created = 0, updated = 0, errors = 0;
+      const previousRows = await InadimplenciaDetalhe.find({
+        user: userId,
+        status: { $ne: 'pago' },
+        importStatus: { $ne: 'saiu' }
+      }).select('lead cpfCnpj cliente').lean();
+      const previousDebtors = new Map();
+      previousRows.forEach((row) => {
+        const key = getDebtorImportKey({ cpfCnpj: row.cpfCnpj, cliente: row.cliente, lead: row.lead });
+        if (!key) return;
+        if (!previousDebtors.has(key)) previousDebtors.set(key, { leadIds: new Set(), cpfCnpj: row.cpfCnpj, cliente: row.cliente });
+        if (row.lead) previousDebtors.get(key).leadIds.add(String(row.lead));
+      });
+      const currentDebtorKeys = new Set(records.map(getDebtorImportKeyFromRow).filter(Boolean));
+      let created = 0, updated = 0, errors = 0, newDebtors = 0, exitedDebtors = 0;
       let lastPercent = 0;
 
       for (let i = 0; i < records.length; i++) {
@@ -260,6 +307,9 @@ class SpreadsheetController {
             errors++;
             continue; // Ignora linha inválida
           }
+
+          const debtorImportKey = getDebtorImportKey({ cpfCnpj, cliente: clienteNome });
+          const rowImportStatus = previousDebtors.has(debtorImportKey) ? 'mantido' : 'novo';
 
           const lead = await findOrCreateLead(userId, {
             cpfCnpj,
@@ -303,6 +353,10 @@ class SpreadsheetController {
             telefone1:           col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
             telefone2:           col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
             parcela,
+            debtorImportKey,
+            importStatus: rowImportStatus,
+            lastSeenBatch: importBatch,
+            exitedInBatch: null,
             atraso:  parseInt(col(row, 'Atraso', 'ATRASO', 'Atraso (dias)') || '0') || 0,
             principal: parseDecimal(col(row, 'Principal', 'PRINCIPAL')),
             juros:     parseDecimal(col(row, 'Juros', 'Juros de Mora', 'JUROS')),
@@ -313,6 +367,7 @@ class SpreadsheetController {
           if (vencimento) {
             const existing = await InadimplenciaDetalhe.findOne(matchQuery);
             if (existing) {
+                const previousFirstSeenBatch = existing.firstSeenBatch || existing.importBatch || importBatch;
                 // Se for o MESMO batch de importação, nós SOMAMOS (para suportar múltiplas linhas do mesmo item na mesma planilha)
                 // Se for um batch DIFERENTE (ex: re-importação), nós SOBRESCREVEMOS (para atualizar com a planilha mais recente)
                 if (existing.importBatch === updateData.importBatch) {
@@ -340,10 +395,15 @@ class SpreadsheetController {
                     existing.telefone1     = updateData.telefone1;
                 }
 
+              existing.debtorImportKey = updateData.debtorImportKey;
+              existing.importStatus = updateData.importStatus;
+              existing.lastSeenBatch = updateData.lastSeenBatch;
+              existing.exitedInBatch = null;
+              existing.firstSeenBatch = previousFirstSeenBatch;
               await existing.save();
               updated++;
             } else {
-              await InadimplenciaDetalhe.create({ ...matchQuery, ...updateData, tags: ['novo'] });
+              await InadimplenciaDetalhe.create({ ...matchQuery, ...updateData, firstSeenBatch: importBatch, tags: rowImportStatus === 'novo' ? ['novo'] : [] });
               created++;
             }
           } else {
@@ -356,9 +416,32 @@ class SpreadsheetController {
         }
       }
 
+      const mongoose = require('mongoose');
+      for (const [key, previous] of previousDebtors.entries()) {
+        if (currentDebtorKeys.has(key)) continue;
+        const leadIds = [...previous.leadIds].map((id) => new mongoose.Types.ObjectId(id));
+        const exitQuery = {
+          user: userId,
+          status: { $ne: 'pago' },
+          importStatus: { $ne: 'saiu' },
+          ...(leadIds.length ? { lead: { $in: leadIds } } : { debtorImportKey: key })
+        };
+        const exitResult = await InadimplenciaDetalhe.updateMany(exitQuery, {
+          $set: {
+            importStatus: 'saiu',
+            exitedInBatch: importBatch,
+            debtorImportKey: key
+          },
+          $addToSet: { tags: 'saiu' }
+        });
+        if (exitResult.modifiedCount > 0) exitedDebtors++;
+      }
+
+      newDebtors = [...currentDebtorKeys].filter((key) => !previousDebtors.has(key)).length;
+
       // Finaliza progresso
       if (io) io.emit('spreadsheet-progress', { percent: 100, status: 'finalizado' });
-      res.json({ success: true, importBatch, created, updated, errors, total: records.length });
+      res.json({ success: true, importBatch, created, updated, errors, total: records.length, newDebtors, exitedDebtors });
     } catch (e) {
       logger.error('[importGeneric] Erro crítico:', e);
       res.status(500).json({ message: `Erro ao processar a planilha: ${e.message}` });
@@ -435,6 +518,7 @@ class SpreadsheetController {
 
       const pipeline = [
         { $match: { user: uid, status: { $ne: 'pago' } } },
+        { $sort: { updatedAt: -1 } },
         {
           $group: {
             _id: "$lead",
@@ -443,6 +527,10 @@ class SpreadsheetController {
             empreendimento: { $first: "$empreendimento" },
             contrato: { $first: "$contrato" },
             telefone1: { $first: "$telefone1" },
+            telefone2: { $first: "$telefone2" },
+            importStatus: { $first: "$importStatus" },
+            lastSeenBatch: { $first: "$lastSeenBatch" },
+            exitedInBatch: { $first: "$exitedInBatch" },
             totalGeral: { $sum: "$total" },
             totalPrincipalGeral: { $sum: "$principal" },
             totalVencido: {
@@ -458,6 +546,11 @@ class SpreadsheetController {
             qtdVencidas: {
               $sum: {
                 $cond: [{ $lte: ["$vencimento", today] }, 1, 0]
+              }
+            },
+            qtdFuturas: {
+              $sum: {
+                $cond: [{ $gt: ["$vencimento", today] }, 1, 0]
               }
             },
             charges: { $push: "$$ROOT" }
@@ -481,18 +574,24 @@ class SpreadsheetController {
             empreendimento: 1,
             contrato: 1,
             telefone1: 1,
+            telefone2: 1,
+            importStatus: { $ifNull: ["$importStatus", "mantido"] },
+            lastSeenBatch: 1,
+            exitedInBatch: 1,
             totalGeral: 1,
             totalPrincipalGeral: 1,
             totalVencido: 1,
             totalFuturo: 1,
             qtdVencidas: 1,
+            qtdFuturas: 1,
             charges: 1,
             status: "$leadInfo.status",
+            manualReportStatus: "$leadInfo.manualReportStatus",
             tags: "$leadInfo.tags",
             contacts: "$leadInfo.contacts"
           }
         },
-        { $sort: { totalVencido: -1 } }
+        { $sort: { importStatus: 1, totalVencido: -1 } }
       ];
 
       const result = await InadimplenciaDetalhe.aggregate(pipeline);
@@ -523,6 +622,26 @@ class SpreadsheetController {
   }
 
   // ── 5. Limpar Base de Dados do Usuário ──────────────────────────────────────
+  async updateDebtorReportStatus(req, res) {
+    try {
+      const userId = req.user.id;
+      const { leadId } = req.params;
+      const manualReportStatus = String(req.body.manualReportStatus || '').trim();
+
+      const lead = await Lead.findOneAndUpdate(
+        { _id: leadId, user: userId },
+        { $set: { manualReportStatus } },
+        { new: true }
+      ).select('_id manualReportStatus');
+
+      if (!lead) return res.status(404).json({ message: 'Devedor nao encontrado.' });
+      res.json({ success: true, lead });
+    } catch (e) {
+      logger.error('[updateDebtorReportStatus] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
+
   async clearData(req, res) {
     try {
       const userId = req.user.id;
@@ -535,7 +654,7 @@ class SpreadsheetController {
       
       const resLeads = await Lead.deleteMany({ user: userId });
       console.log(`--- [BACKEND] Leads deletados: ${resLeads.deletedCount}`);
-      const resDebts = await InadimplenciaDetalhe.deleteMany({ userId });
+      const resDebts = await InadimplenciaDetalhe.deleteMany({ user: userId });
       console.log(`--- [BACKEND] Dívidas deletadas: ${resDebts.deletedCount}`);
       
       res.json({
@@ -566,17 +685,23 @@ class SpreadsheetController {
       const Debt = require('../../utils/modelProvider').getModel('Debt');
       const { format } = require('date-fns');
 
-      const matchStage = { user: uid };
+      const matchStage = { user: uid, ...(type === 'listagem' ? { status: { $ne: 'pago' } } : {}) };
       if (leadId) matchStage.lead = new (require('mongoose').Types.ObjectId)(leadId);
 
       const debtors = await InadimplenciaDetalhe.aggregate([
         { $match: matchStage },
+        { $sort: { updatedAt: -1 } },
         {
           $group: {
             _id: "$lead",
             cliente: { $first: "$cliente" },
             cpfCnpj: { $first: "$cpfCnpj" },
             empreendimento: { $first: "$empreendimento" },
+            telefone1: { $first: "$telefone1" },
+            telefone2: { $first: "$telefone2" },
+            importStatus: { $first: "$importStatus" },
+            lastSeenBatch: { $first: "$lastSeenBatch" },
+            exitedInBatch: { $first: "$exitedInBatch" },
             totalPrincipal: { $sum: "$principal" },
             totalGeral: { $sum: "$total" }
           }
@@ -604,6 +729,58 @@ class SpreadsheetController {
       doc.fillColor(secondaryColor).fontSize(10).font('Helvetica').text(`Gerado em: ${format(new Date(), 'dd/mm/yyyy HH:mm:ss')}`, { align: 'center' });
       doc.moveDown(2);
 
+      if (type === 'listagem') {
+        const fmtPhone = (phone) => {
+          const clean = String(phone || '').replace(/\D/g, '');
+          if (!clean) return '-';
+          if (clean.length === 13 && clean.startsWith('55')) return `(${clean.slice(2, 4)}) ${clean.slice(4, 9)}-${clean.slice(9)}`;
+          if (clean.length === 11) return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
+          if (clean.length === 10) return `(${clean.slice(0, 2)}) ${clean.slice(2, 6)}-${clean.slice(6)}`;
+          return clean;
+        };
+
+        doc.fillColor('#000000').fontSize(13).font('Helvetica-Bold').text('Listagem para impressao - um devedor por linha');
+        doc.fillColor(secondaryColor).fontSize(9).font('Helvetica').text('Inclui status manual e movimento calculado pela comparacao da ultima importacao com a base anterior.');
+        doc.moveDown(1);
+
+        const columns = [
+          { title: 'Nome', x: 50, width: 170 },
+          { title: 'Telefone', x: 220, width: 92 },
+          { title: 'Status manual', x: 312, width: 115 },
+          { title: 'Movimento', x: 427, width: 88 },
+          { title: 'Total', x: 515, width: 70 }
+        ];
+        const drawHeader = () => {
+          const y = doc.y;
+          doc.rect(45, y, 510, 18).fill('#eef2ff');
+          columns.forEach((c) => doc.fillColor(primaryColor).fontSize(8).font('Helvetica-Bold').text(c.title, c.x, y + 5, { width: c.width }));
+          doc.y = y + 23;
+        };
+
+        drawHeader();
+        debtors.forEach((d, index) => {
+          if (doc.y > 760) {
+            doc.addPage();
+            drawHeader();
+          }
+          const y = doc.y;
+          if (index % 2 === 0) doc.rect(45, y - 2, 510, 18).fill('#f8fafc');
+          const reportStatus = d.leadInfo?.manualReportStatus || d.leadInfo?.status || '-';
+          const phone = d.telefone1 || d.telefone2 || d.leadInfo?.phone;
+          const movement = formatImportStatus(d.importStatus);
+          const total = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.totalGeral || 0);
+          doc.fillColor('#111827').fontSize(8).font('Helvetica').text(d.cliente || '-', columns[0].x, y, { width: columns[0].width, ellipsis: true });
+          doc.text(fmtPhone(phone), columns[1].x, y, { width: columns[1].width });
+          doc.text(reportStatus, columns[2].x, y, { width: columns[2].width, ellipsis: true });
+          doc.text(movement, columns[3].x, y, { width: columns[3].width, ellipsis: true });
+          doc.text(total, columns[4].x, y, { width: columns[4].width, align: 'right' });
+          doc.y = y + 18;
+        });
+
+        doc.end();
+        return;
+      }
+
       for (const d of debtors) {
         // Bloco do Devedor
         doc.fillColor(primaryColor).fontSize(14).font('Helvetica-Bold').text('DADOS DO DEVEDOR', { underline: true });
@@ -613,6 +790,8 @@ class SpreadsheetController {
         doc.font('Helvetica-Bold').text(`CPF/CNPJ: `, { continued: true }).font('Helvetica').text(d.cpfCnpj || '—');
         doc.font('Helvetica-Bold').text(`Empreendimento: `, { continued: true }).font('Helvetica').text(d.empreendimento || '—');
         doc.font('Helvetica-Bold').text(`Status Atual: `, { continued: true }).font('Helvetica').text((d.leadInfo?.status || 'novo').toUpperCase());
+        doc.font('Helvetica-Bold').text(`Status Manual: `, { continued: true }).font('Helvetica').text(d.leadInfo?.manualReportStatus || '---');
+        doc.font('Helvetica-Bold').text(`Movimento Importacao: `, { continued: true }).font('Helvetica').text(formatImportStatus(d.importStatus));
         doc.moveDown(0.5);
 
         // Financeiro
