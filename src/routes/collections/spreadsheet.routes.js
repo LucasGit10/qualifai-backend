@@ -34,4 +34,8 @@ router.get('/import-batches', auth, spreadsheetController.getImportBatches);
 router.put('/debtors/:leadId/report-status', auth, spreadsheetController.updateDebtorReportStatus);
 router.delete('/clear',       auth, spreadsheetController.clearData);
 
+// ── Diagnóstico e Correção de Duplicatas ────────────────────────────────────
+router.get('/diagnose-duplicates',  auth, spreadsheetController.diagnoseDuplicates);
+router.post('/fix-duplicates',      auth, spreadsheetController.fixDuplicates);
+
 module.exports = router;

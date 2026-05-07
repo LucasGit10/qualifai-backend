@@ -460,12 +460,26 @@ class SpreadsheetController {
 
           if (vencimento) {
             const { start, end } = getDateRange(vencimento);
+            // Tentativas de match em ordem crescente de tolerância:
+            // 1. Chave exata da sessão atual
+            // 2. Chave base (sem sufixo seq)
+            // 3. Registro sem chargeImportKey + mesmo matchQuery
+            // 4. [FALLBACK CROSS-PLANILHA] Mesmo devedor + mesmo contrato + mesma data, independente de esp/elemento/parcela
+            //    Cobre o caso em que a planilha antiga (inadimplencia) não tinha as colunas Esp/Elemento/Parcela
+            //    mas a nova (detalhado) tem, fazendo as chargeImportKeys diferirem para o mesmo lançamento real.
             const existing = await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey })
               || await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey: chargeBaseKey })
               || await InadimplenciaDetalhe.findOne({
                 ...matchQuery,
                 chargeImportKey: { $in: [null, ''] },
                 vencimento: { $gte: start, $lt: end }
+              })
+              || await InadimplenciaDetalhe.findOne({
+                user: userId,
+                lead: lead?._id,
+                contrato: contrato || '',
+                vencimento: { $gte: start, $lt: end },
+                status: { $ne: 'pago' }
               });
             if (existing) {
                 const previousFirstSeenBatch = existing.firstSeenBatch || existing.importBatch || importBatch;
@@ -620,7 +634,7 @@ class SpreadsheetController {
       const today = new Date();
 
       const pipeline = [
-        { $match: { user: uid, status: { $ne: 'pago' } } },
+        { $match: { user: uid, status: { $ne: 'pago' }, importStatus: { $ne: 'saiu' } } },
         { $sort: { updatedAt: -1 } },
         {
           $group: {
@@ -1048,6 +1062,125 @@ class SpreadsheetController {
       if (!res.headersSent) res.status(500).json({ message: 'Erro ao gerar PDF.' });
     }
   }
+
+  // ── 7. Diagnóstico de Duplicatas ─────────────────────────────────────────────
+  /**
+   * GET /spreadsheets/diagnose-duplicates
+   * Retorna grupos de registros duplicados para o usuário autenticado.
+   * Duplicata: mesmo lead + contrato + dia de vencimento com mais de 1 registro não pago.
+   */
+  async diagnoseDuplicates(req, res) {
+    try {
+      const userId = req.user.id;
+      const uid = new (require('mongoose').Types.ObjectId)(userId);
+
+      const duplicates = await InadimplenciaDetalhe.aggregate([
+        { $match: { user: uid, status: { $ne: 'pago' } } },
+        {
+          $group: {
+            _id: {
+              lead: '$lead',
+              contrato: '$contrato',
+              ano:  { $year:  '$vencimento' },
+              mes:  { $month: '$vencimento' },
+              dia:  { $dayOfMonth: '$vencimento' }
+            },
+            ids:          { $push: '$_id' },
+            batches:      { $push: '$importBatch' },
+            chargeKeys:   { $push: '$chargeImportKey' },
+            totals:       { $push: '$total' },
+            clientes:     { $addToSet: '$cliente' },
+            importStatuses: { $addToSet: '$importStatus' },
+            updatedAts:   { $push: '$updatedAt' },
+            count:        { $sum: 1 }
+          }
+        },
+        { $match: { count: { $gt: 1 } } },
+        { $sort: { count: -1 } }
+      ]);
+
+      const totalDuplicateRecords = duplicates.reduce((acc, g) => acc + g.count - 1, 0);
+
+      res.json({
+        groups: duplicates.length,
+        totalDuplicateRecords,
+        details: duplicates.map(g => ({
+          cliente: g.clientes.join('/'),
+          contrato: g._id.contrato,
+          vencimento: `${g._id.dia}/${g._id.mes}/${g._id.ano}`,
+          count: g.count,
+          totalSomado: g.totals.reduce((a, b) => a + (b || 0), 0),
+          ids: g.ids,
+          batches: g.batches,
+          chargeKeys: g.chargeKeys,
+          importStatuses: g.importStatuses
+        }))
+      });
+    } catch (e) {
+      logger.error('[diagnoseDuplicates] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
+
+  // ── 8. Correção de Duplicatas ─────────────────────────────────────────────────
+  /**
+   * POST /spreadsheets/fix-duplicates
+   * Remove registros duplicados, mantendo o mais recente (por updatedAt) em cada grupo.
+   * Retorna quantos registros foram removidos.
+   */
+  async fixDuplicates(req, res) {
+    try {
+      const userId = req.user.id;
+      const uid = new (require('mongoose').Types.ObjectId)(userId);
+
+      const duplicates = await InadimplenciaDetalhe.aggregate([
+        { $match: { user: uid, status: { $ne: 'pago' } } },
+        {
+          $group: {
+            _id: {
+              lead: '$lead',
+              contrato: '$contrato',
+              ano:  { $year:  '$vencimento' },
+              mes:  { $month: '$vencimento' },
+              dia:  { $dayOfMonth: '$vencimento' }
+            },
+            ids:        { $push: '$_id' },
+            updatedAts: { $push: '$updatedAt' },
+            count:      { $sum: 1 }
+          }
+        },
+        { $match: { count: { $gt: 1 } } }
+      ]);
+
+      const idsToRemove = [];
+
+      for (const group of duplicates) {
+        // Ordena do mais recente para o mais antigo
+        const entries = group.ids.map((id, i) => ({ id, updatedAt: group.updatedAts[i] || new Date(0) }));
+        entries.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+        // Mantém o primeiro (mais recente), remove os demais
+        entries.slice(1).forEach(e => idsToRemove.push(e.id));
+      }
+
+      if (!idsToRemove.length) {
+        return res.json({ success: true, removed: 0, message: 'Nenhuma duplicata encontrada.' });
+      }
+
+      const result = await InadimplenciaDetalhe.deleteMany({ _id: { $in: idsToRemove } });
+
+      logger.info(`[fixDuplicates] Removidas ${result.deletedCount} duplicatas para usuário ${userId}`);
+      res.json({
+        success: true,
+        removed: result.deletedCount,
+        groups: duplicates.length,
+        message: `${result.deletedCount} registros duplicados removidos. Os mais recentes foram mantidos.`
+      });
+    } catch (e) {
+      logger.error('[fixDuplicates] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
 }
 
 module.exports = new SpreadsheetController();
+
