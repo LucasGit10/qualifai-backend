@@ -226,6 +226,12 @@ const getChargeImportKey = ({ debtorImportKey, contrato, vencimento, esp, elemen
   normalizeKeyPart(taxaExtra)
 ].join('|');
 
+const getNextOccurrenceKey = (map, baseKey) => {
+  const occurrence = (map.get(baseKey) || 0) + 1;
+  map.set(baseKey, occurrence);
+  return `${baseKey}|seq:${occurrence}`;
+};
+
 const getDateRange = (date) => {
   const start = new Date(date);
   start.setUTCHours(0, 0, 0, 0);
@@ -349,7 +355,7 @@ class SpreadsheetController {
         if (row.lead) previousDebtors.get(key).leadIds.add(String(row.lead));
       });
       const currentDebtorKeys = new Set(records.map(getDebtorImportKeyFromRow).filter(Boolean));
-      const importedChargeKeys = new Set();
+      const chargeOccurrences = new Map();
       let created = 0, updated = 0, errors = 0, newDebtors = 0, exitedDebtors = 0, skippedDuplicates = 0;
       let lastPercent = 0;
 
@@ -400,21 +406,17 @@ class SpreadsheetController {
 
           const esp = col(row, 'Esp', 'ESP') || null;
           const elemento = col(row, 'Elemento', 'ELEMENTO') || null;
-          const parcela = parseInt(col(row, 'Parcela', 'PARCELA') || '0') || null;
+          const parcelaRaw = col(row, 'Parcela', 'PARCELA');
+          const parcela = parseInt(parcelaRaw || '0') || null;
           const taxaExtra = col(row, 'Taxa Extra', 'TAXA_EXTRA', 'TaxaExtra') || null;
-          const chargeImportKey = getChargeImportKey({ debtorImportKey, contrato, vencimento, esp, elemento, parcela, taxaExtra });
+          const chargeBaseKey = getChargeImportKey({ debtorImportKey, contrato, vencimento, esp, elemento, parcela: parcelaRaw || parcela, taxaExtra });
+          const chargeImportKey = getNextOccurrenceKey(chargeOccurrences, chargeBaseKey);
 
           if (!vencimento) {
             console.warn(`[Import] Linha ${i + 1} sem data de vencimento vÃ¡lida.`);
             errors++;
             continue;
           }
-
-          if (importedChargeKeys.has(chargeImportKey)) {
-            skippedDuplicates++;
-            continue;
-          }
-          importedChargeKeys.add(chargeImportKey);
 
           const matchQuery = {
             user: userId,
@@ -459,8 +461,10 @@ class SpreadsheetController {
           if (vencimento) {
             const { start, end } = getDateRange(vencimento);
             const existing = await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey })
+              || await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey: chargeBaseKey })
               || await InadimplenciaDetalhe.findOne({
                 ...matchQuery,
+                chargeImportKey: { $in: [null, ''] },
                 vencimento: { $gte: start, $lt: end }
               });
             if (existing) {
