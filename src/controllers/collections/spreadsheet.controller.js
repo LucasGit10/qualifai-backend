@@ -1,15 +1,15 @@
 /**
  * spreadsheetController.js
- * Importação das 3 planilhas do sistema de cobrança:
+ * ImportaÃ§Ã£o das 3 planilhas do sistema de cobranÃ§a:
  *   1. SPC (SPC_MR, SPC_GT)
  *   2. Contas a Receber (MARCA_REGISTRADA, GRAN_TORO)
- *   3. Inadimplência Detalhado (INADIMPLENCIA_DETALHADO, PLAN1)
+ *   3. InadimplÃªncia Detalhado (INADIMPLENCIA_DETALHADO, PLAN1)
  *
- * Estratégia de vinculação ao Lead:
+ * EstratÃ©gia de vinculaÃ§Ã£o ao Lead:
  *   - SPC: usa NUMERO_DOCUMENTO (CPF/CNPJ) + EMAIL
  *   - Contas a Receber: usa CLIENTE (nome) + CONTRATO
- *   - Inadimplência: usa CPF_CNPJ + CONTRATO
- *   Se o Lead não for encontrado, cria um novo automaticamente.
+ *   - InadimplÃªncia: usa CPF_CNPJ + CONTRATO
+ *   Se o Lead nÃ£o for encontrado, cria um novo automaticamente.
  */
 
 const fs = require('fs');
@@ -24,7 +24,7 @@ const SpcRecord = getModel('SpcRecord');
 const ContasReceber = getModel('ContasReceber');
 const InadimplenciaDetalhe = getModel('InadimplenciaDetalhe');
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Detecta separador de CSV automaticamente */
 const detectSeparator = (filePath) => new Promise((resolve) => {
@@ -39,7 +39,7 @@ const detectSeparator = (filePath) => new Promise((resolve) => {
   stream.on('error', () => resolve(','));
 });
 
-/** Lê registros de um arquivo (CSV ou Excel) */
+/** LÃª registros de um arquivo (CSV ou Excel) */
 const normalizeKey = (k) => String(k || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s/g, '');
 
 const findSpreadsheetHeaderIndex = (rows) => rows.findIndex((row) => {
@@ -52,7 +52,7 @@ const findSpreadsheetHeaderIndex = (rows) => rows.findIndex((row) => {
 const rowsToObjectsFromDetectedHeader = (rows, sheetName) => {
   const headerIndex = findSpreadsheetHeaderIndex(rows);
   if (headerIndex === -1) {
-    logger.warn(`[Spreadsheet] Aba ${sheetName} ignorada: cabeçalho Cliente/Vencimento/Principal/Total não encontrado.`);
+    logger.warn(`[Spreadsheet] Aba ${sheetName} ignorada: cabeÃ§alho Cliente/Vencimento/Principal/Total nÃ£o encontrado.`);
     return [];
   }
 
@@ -99,10 +99,10 @@ const readFileRecords = async (filePath, fileExt) => {
     
     return allRecords;
   }
-  throw new Error(`Formato não suportado: ${fileExt}`);
+  throw new Error(`Formato nÃ£o suportado: ${fileExt}`);
 };
 
-/** Normaliza nome de coluna para comparação robusta: remove espaços, acento e case */
+/** Normaliza nome de coluna para comparaÃ§Ã£o robusta: remove espaÃ§os, acento e case */
 
 const col = (row, ...keys) => {
   const rowKeys = Object.keys(row);
@@ -124,7 +124,7 @@ const col = (row, ...keys) => {
 /** Converte string de data para Date (suporta dd/mm/yyyy e yyyy-mm-dd) */
 const parseDate = (val) => {
   if (!val) return null;
-  if (val instanceof Date) return val; // Já é um objeto Date
+  if (val instanceof Date) return val; // JÃ¡ Ã© um objeto Date
   if (typeof val === 'number') {
     const d = new Date((val - 25569) * 86400 * 1000);
     return isNaN(d.getTime()) ? null : d;
@@ -135,7 +135,7 @@ const parseDate = (val) => {
   // DD/MM/YYYY
   const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
   if (m) return new Date(`${m[3]}-${m[2]}-${m[1]}`);
-  // Número serial do Excel
+  // NÃºmero serial do Excel
   const n = parseFloat(s);
   if (!isNaN(n) && n > 30000) {
     const d = new Date((n - 25569) * 86400 * 1000);
@@ -150,7 +150,7 @@ const parseDecimal = (val) => {
   if (typeof val === 'number') return val;
   let s = String(val).trim();
   
-  // Se tem vírgula e ponto, descobrimos qual é o decimal
+  // Se tem vÃ­rgula e ponto, descobrimos qual Ã© o decimal
   if (s.includes(',') && s.includes('.')) {
     if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
       // Formato BR: 1.234,56
@@ -160,11 +160,11 @@ const parseDecimal = (val) => {
       s = s.replace(/,/g, '');
     }
   } else if (s.includes(',')) {
-    // Só tem vírgula: assumimos decimal BR 1234,56
+    // SÃ³ tem vÃ­rgula: assumimos decimal BR 1234,56
     s = s.replace(',', '.');
   }
   
-  // Remove tudo que não for dígito ou ponto ou sinal de menos
+  // Remove tudo que nÃ£o for dÃ­gito ou ponto ou sinal de menos
   const clean = s.replace(/[^\d.-]/g, '');
   const n = parseFloat(clean);
   return isNaN(n) ? 0 : n;
@@ -175,7 +175,7 @@ const normalizePhone = (phone) => {
   const clean = String(phone).replace(/\D/g, '');
   if (!clean) return null;
   
-  // Se tem 10 ou 11 dígitos, provavelmente é Brasil sem o 55
+  // Se tem 10 ou 11 dÃ­gitos, provavelmente Ã© Brasil sem o 55
   if (clean.length === 10 || clean.length === 11) {
     return '55' + clean;
   }
@@ -249,7 +249,7 @@ const formatImportStatus = (status) => {
   return map[status] || 'Sem comparacao';
 };
 
-/** Busca ou cria um Lead pelo CPF/CNPJ ou e-mail de forma atômica/robusta */
+/** Busca ou cria um Lead pelo CPF/CNPJ ou e-mail de forma atÃ´mica/robusta */
 const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefone2, empresa }) => {
   try {
     const docNorm = cpfCnpj ? cpfCnpj.replace(/\D/g, '') : null;
@@ -310,9 +310,9 @@ const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefo
   } catch (e) {
     logger.warn(`[Spreadsheet] Erro ao processar lead (${cpfCnpj}): ${e.message}`);
     
-    // Fallback agressivo caso ainda dê conflito (ex: race condition em imports paralelos)
+    // Fallback agressivo caso ainda dÃª conflito (ex: race condition em imports paralelos)
     if (e.message && e.message.includes('E11000')) {
-      // Tenta pelo CPF/CNPJ primeiro (mais confiável, sempre presente na planilha)
+      // Tenta pelo CPF/CNPJ primeiro (mais confiÃ¡vel, sempre presente na planilha)
       const docNorm = cpfCnpj ? cpfCnpj.replace(/\D/g, '') : null;
       if (docNorm) {
         const byDoc = await Lead.findOne({ user: userId, taxId: docNorm });
@@ -334,155 +334,142 @@ const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefo
   }
 };
 
-// ─── Controller ───────────────────────────────────────────────────────────────
+// â”€â”€â”€ Controller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class SpreadsheetController {
 
-  // ── Importação Genérica de Planilha de Cobrança (UPSERT) ───────────────────
+  // â”€â”€ ImportaÃ§Ã£o GenÃ©rica de Planilha de CobranÃ§a (UPSERT) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async importGeneric(req, res) {
-    if (!req.file) return res.status(400).json({ message: 'Arquivo é obrigatório.' });
+    if (!req.file) return res.status(400).json({ message: 'Arquivo Ã© obrigatÃ³rio.' });
     
     const userId = req.user.id;
     const filePath = req.file.path;
     const fileExt = path.extname(req.file.originalname).toLowerCase();
     const arquivoOrigem = req.body.arquivoOrigem || req.file.originalname;
     const importBatch = `${new Date().toISOString().replace(/[:.]/g, '-')}_${req.file.originalname}`;
+    const io = req.app.get('io');
 
+    let records;
     try {
-      const records = await readFileRecords(filePath, fileExt);
+      records = await readFileRecords(filePath, fileExt);
       console.log(`[Import] Arquivo lido. Total de linhas: ${records.length}`);
       if (!records.length) {
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         return res.status(400).json({
-          message: 'Nenhuma linha válida encontrada. Verifique se a planilha tem colunas Cliente, Vencimento, Principal e Total.'
+          message: 'Nenhuma linha vÃ¡lida encontrada. Verifique se a planilha tem colunas Cliente, Vencimento, Principal e Total.'
         });
       }
-      
-      const io = req.app.get('io');
-      const previousRows = await InadimplenciaDetalhe.find({
-        user: userId,
-        status: { $ne: 'pago' },
-        importStatus: { $ne: 'saiu' }
-      }).select('lead cpfCnpj cliente').lean();
-      const previousDebtors = new Map();
-      previousRows.forEach((row) => {
-        const key = getDebtorImportKey({ cpfCnpj: row.cpfCnpj, cliente: row.cliente, lead: row.lead });
-        if (!key) return;
-        if (!previousDebtors.has(key)) previousDebtors.set(key, { leadIds: new Set(), cpfCnpj: row.cpfCnpj, cliente: row.cliente });
-        if (row.lead) previousDebtors.get(key).leadIds.add(String(row.lead));
-      });
-      const currentDebtorKeys = new Set(records.map(getDebtorImportKeyFromRow).filter(Boolean));
-      const chargeOccurrences = new Map();
+    } catch (readErr) {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(400).json({ message: `Erro ao ler o arquivo: ${readErr.message}` });
+    }
+
+    // â”€â”€â”€ Responde IMEDIATAMENTE para nÃ£o sofrer timeout do proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // O processamento real roda em background e notifica via socket.io
+    res.status(202).json({ success: true, importBatch, total: records.length, message: 'ImportaÃ§Ã£o iniciada em background.' });
+
+    // â”€â”€â”€ Processamento em background â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    setImmediate(async () => {
       let created = 0, updated = 0, errors = 0, newDebtors = 0, exitedDebtors = 0, skippedDuplicates = 0;
-      let lastPercent = 0;
+      try {
+        const previousRows = await InadimplenciaDetalhe.find({
+          user: userId,
+          status: { $ne: 'pago' },
+          importStatus: { $ne: 'saiu' }
+        }).select('lead cpfCnpj cliente').lean();
+        const previousDebtors = new Map();
+        previousRows.forEach((row) => {
+          const key = getDebtorImportKey({ cpfCnpj: row.cpfCnpj, cliente: row.cliente, lead: row.lead });
+          if (!key) return;
+          if (!previousDebtors.has(key)) previousDebtors.set(key, { leadIds: new Set(), cpfCnpj: row.cpfCnpj, cliente: row.cliente });
+          if (row.lead) previousDebtors.get(key).leadIds.add(String(row.lead));
+        });
+        const currentDebtorKeys = new Set(records.map(getDebtorImportKeyFromRow).filter(Boolean));
+        const chargeOccurrences = new Map();
+        let lastPercent = 0;
 
-      for (let i = 0; i < records.length; i++) {
-        const row = records[i];
-        try {
-          // Emissão de progresso via Socket (a cada 5% ou a cada 10 registros)
-          const currentPercent = Math.round(((i + 1) / records.length) * 100);
-          if (currentPercent > lastPercent || (i + 1) % 10 === 0) {
-            lastPercent = currentPercent;
-            if (io) {
-              io.emit('spreadsheet-progress', {
-                percent: currentPercent,
-                current: i + 1,
-                total: records.length,
-                status: 'extraindo'
-              });
+        for (let i = 0; i < records.length; i++) {
+          const row = records[i];
+          try {
+            // Progresso via Socket
+            const currentPercent = Math.round(((i + 1) / records.length) * 100);
+            if (currentPercent > lastPercent || (i + 1) % 10 === 0) {
+              lastPercent = currentPercent;
+              if (io) io.emit('spreadsheet-progress', { percent: currentPercent, current: i + 1, total: records.length, status: 'extraindo' });
             }
-          }
-          const cpfCnpj  = col(row, 'CPF/CNPJ', 'CPF', 'CNPJ', 'cpfCnpj', 'Documento');
-          const clienteNome = col(row, 'Cliente', 'CLIENTE', 'NOME', 'Razão', 'Razao', 'Nome do Cliente');
-          const contrato = col(row, 'Contrato', 'CONTRATO', 'Número do Contrato');
-          const vencimentoRaw = col(row, 'Vencimento', 'VENCIMENTO', 'DATA_VENCIMENTO', 'Data do Vencimento');
-          const vencimento = parseDate(vencimentoRaw);
+            const cpfCnpj  = col(row, 'CPF/CNPJ', 'CPF', 'CNPJ', 'cpfCnpj', 'Documento');
+            const clienteNome = col(row, 'Cliente', 'CLIENTE', 'NOME', 'RazÃ£o', 'Razao', 'Nome do Cliente');
+            const contrato = col(row, 'Contrato', 'CONTRATO', 'NÃºmero do Contrato');
+            const vencimentoRaw = col(row, 'Vencimento', 'VENCIMENTO', 'DATA_VENCIMENTO', 'Data do Vencimento');
+            const vencimento = parseDate(vencimentoRaw);
 
-          if (!clienteNome && !cpfCnpj) {
-            errors++;
-            continue; // Ignora linha inválida
-          }
+            if (!clienteNome && !cpfCnpj) { errors++; continue; }
+            if (!vencimento) {
+              console.warn(`[Import] Linha ${i + 1} sem data de vencimento valida.`);
+              errors++; continue;
+            }
 
-          if (!vencimento) {
-            console.warn(`[Import] Linha ${i + 1} sem data de vencimento valida.`);
-            errors++;
-            continue;
-          }
+            const debtorImportKey = getDebtorImportKey({ cpfCnpj, cliente: clienteNome });
+            const rowImportStatus = previousDebtors.has(debtorImportKey) ? 'mantido' : 'novo';
 
-          const debtorImportKey = getDebtorImportKey({ cpfCnpj, cliente: clienteNome });
-          const rowImportStatus = previousDebtors.has(debtorImportKey) ? 'mantido' : 'novo';
+            const lead = await findOrCreateLead(userId, {
+              cpfCnpj,
+              nome: clienteNome,
+              email: col(row, 'E-mail', 'Email', 'EMAIL'),
+              telefone: col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
+              telefone2: col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
+              empresa:  col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa'),
+            });
 
-          const lead = await findOrCreateLead(userId, {
-            cpfCnpj,
-            nome: clienteNome,
-            email: col(row, 'E-mail', 'Email', 'EMAIL'),
-            telefone: col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
-            telefone2: col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
-            empresa:  col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa'),
-          });
+            const esp = col(row, 'Esp', 'ESP') || null;
+            const elemento = col(row, 'Elemento', 'ELEMENTO') || null;
+            const parcelaRaw = col(row, 'Parcela', 'PARCELA');
+            const parcela = parseInt(parcelaRaw || '0') || null;
+            const taxaExtra = col(row, 'Taxa Extra', 'TAXA_EXTRA', 'TaxaExtra') || null;
+            const chargeBaseKey = getChargeImportKey({ debtorImportKey, contrato, vencimento, esp, elemento, parcela: parcelaRaw || parcela, taxaExtra });
+            const chargeImportKey = getNextOccurrenceKey(chargeOccurrences, chargeBaseKey);
 
-          const esp = col(row, 'Esp', 'ESP') || null;
-          const elemento = col(row, 'Elemento', 'ELEMENTO') || null;
-          const parcelaRaw = col(row, 'Parcela', 'PARCELA');
-          const parcela = parseInt(parcelaRaw || '0') || null;
-          const taxaExtra = col(row, 'Taxa Extra', 'TAXA_EXTRA', 'TaxaExtra') || null;
-          const chargeBaseKey = getChargeImportKey({ debtorImportKey, contrato, vencimento, esp, elemento, parcela: parcelaRaw || parcela, taxaExtra });
-          const chargeImportKey = getNextOccurrenceKey(chargeOccurrences, chargeBaseKey);
+            const matchQuery = {
+              user: userId,
+              lead: lead?._id,
+              contrato: contrato || '',
+              vencimento,
+              esp,
+              elemento,
+              parcela,
+              taxaExtra
+            };
 
-          if (!vencimento) {
-            console.warn(`[Import] Linha ${i + 1} sem data de vencimento vÃ¡lida.`);
-            errors++;
-            continue;
-          }
+            const updateData = {
+              importBatch,
+              arquivoOrigem,
+              cliente:             clienteNome,
+              empreendimento:      col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa'),
+              torre:               col(row, 'Torre', 'TORRE'),
+              apto:                col(row, 'Apto', 'APTO'),
+              esp,
+              elemento,
+              taxaExtra,
+              rf:                  col(row, 'R/F', 'RF'),
+              rg:                  col(row, 'RG', 'Rg'),
+              profissao:           col(row, 'ProfissÃ£o', 'Profissao', 'PROFISSAO'),
+              cpfCnpj,
+              telefone1:           col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
+              telefone2:           col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
+              parcela,
+              debtorImportKey,
+              chargeImportKey,
+              importStatus: rowImportStatus,
+              lastSeenBatch: importBatch,
+              exitedInBatch: null,
+              atraso:  parseInt(col(row, 'Atraso', 'ATRASO', 'Atraso (dias)') || '0') || 0,
+              principal: parseDecimal(col(row, 'Principal', 'PRINCIPAL')),
+              juros:     parseDecimal(col(row, 'Juros', 'Juros de Mora', 'JUROS')),
+              multa:     parseDecimal(col(row, 'Multa', 'MULTA')),
+              total:     parseDecimal(col(row, 'Total', 'TOTAL', 'Valor')),
+            };
 
-          const matchQuery = {
-            user: userId,
-            lead: lead?._id,
-            contrato: contrato || '',
-            vencimento,
-            esp,
-            elemento,
-            parcela,
-            taxaExtra
-          };
-
-          const updateData = {
-            importBatch,
-            arquivoOrigem,
-            cliente:             clienteNome,
-            empreendimento:      col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa'),
-            torre:               col(row, 'Torre', 'TORRE'),
-            apto:                col(row, 'Apto', 'APTO'),
-            esp,
-            elemento,
-            taxaExtra,
-            rf:                  col(row, 'R/F', 'RF'),
-            rg:                  col(row, 'RG', 'Rg'),
-            profissao:           col(row, 'Profissão', 'Profissao', 'PROFISSAO'),
-            cpfCnpj,
-            telefone1:           col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
-            telefone2:           col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
-            parcela,
-            debtorImportKey,
-            chargeImportKey,
-            importStatus: rowImportStatus,
-            lastSeenBatch: importBatch,
-            exitedInBatch: null,
-            atraso:  parseInt(col(row, 'Atraso', 'ATRASO', 'Atraso (dias)') || '0') || 0,
-            principal: parseDecimal(col(row, 'Principal', 'PRINCIPAL')),
-            juros:     parseDecimal(col(row, 'Juros', 'Juros de Mora', 'JUROS')),
-                        multa:     parseDecimal(col(row, 'Multa', 'MULTA')),
-            total:     parseDecimal(col(row, 'Total', 'TOTAL', 'Valor')),
-          };
-
-          if (vencimento) {
             const { start, end } = getDateRange(vencimento);
-            // Tentativas de match em ordem crescente de tolerância:
-            // 1. Chave exata da sessão atual
-            // 2. Chave base (sem sufixo seq)
-            // 3. Registro sem chargeImportKey + mesmo matchQuery
-            // 4. [FALLBACK CROSS-PLANILHA] Mesmo devedor + mesmo contrato + mesma data, independente de esp/elemento/parcela
-            //    Cobre o caso em que a planilha antiga (inadimplencia) não tinha as colunas Esp/Elemento/Parcela
-            //    mas a nova (detalhado) tem, fazendo as chargeImportKeys diferirem para o mesmo lançamento real.
             const existing = await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey })
               || await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey: chargeBaseKey })
               || await InadimplenciaDetalhe.findOne({
@@ -495,49 +482,32 @@ class SpreadsheetController {
                 lead: lead?._id,
                 contrato: contrato || '',
                 vencimento: { $gte: start, $lt: end },
-                // Inclui esp/elemento/parcela para ser preciso em casos de múltiplos lançamentos
-                // no mesmo dia/contrato, mas IGNORA taxaExtra (presente na inadimplência, ausente no detalhado)
                 esp: esp ?? null,
                 elemento: elemento ?? null,
                 parcela: parcela ?? null,
                 status: { $ne: 'pago' }
               });
-            if (existing) {
-                const previousFirstSeenBatch = existing.firstSeenBatch || existing.importBatch || importBatch;
-                // Se for o MESMO batch de importação, nós SOMAMOS (para suportar múltiplas linhas do mesmo item na mesma planilha)
-                // Se for um batch DIFERENTE (ex: re-importação), nós SOBRESCREVEMOS (para atualizar com a planilha mais recente)
-                if (false && existing.importBatch === updateData.importBatch) {
-                    existing.principal = (existing.principal || 0) + updateData.principal;
-                    existing.juros     = (existing.juros || 0) + updateData.juros;
-                    existing.multa     = (existing.multa || 0) + updateData.multa;
-                    existing.total     = (existing.total || 0) + updateData.total;
-                } else {
-                    existing.principal = updateData.principal;
-                    existing.juros     = updateData.juros;
-                    existing.multa     = updateData.multa;
-                    existing.total     = updateData.total;
-                    
-                    // Atualiza campos descritivos
-                    existing.importBatch   = updateData.importBatch;
-                    existing.arquivoOrigem = updateData.arquivoOrigem;
-                    existing.atraso        = updateData.atraso;
-                    existing.cliente       = updateData.cliente;
-                    existing.empreendimento = updateData.empreendimento;
-                    existing.torre         = updateData.torre;
-                    existing.apto          = updateData.apto;
-                    existing.rf            = updateData.rf;
-                    existing.rg            = updateData.rg;
-                    existing.profissao     = updateData.profissao;
-                    existing.telefone1     = updateData.telefone1;
-                    existing.telefone2     = updateData.telefone2;
-                }
 
+            if (existing) {
+              const previousFirstSeenBatch = existing.firstSeenBatch || existing.importBatch || importBatch;
+              existing.principal = updateData.principal;
+              existing.juros     = updateData.juros;
+              existing.multa     = updateData.multa;
+              existing.total     = updateData.total;
+              existing.importBatch   = updateData.importBatch;
+              existing.arquivoOrigem = updateData.arquivoOrigem;
+              existing.atraso        = updateData.atraso;
+              existing.cliente       = updateData.cliente;
+              existing.empreendimento = updateData.empreendimento;
+              existing.torre         = updateData.torre;
+              existing.apto          = updateData.apto;
+              existing.rf            = updateData.rf;
+              existing.rg            = updateData.rg;
+              existing.profissao     = updateData.profissao;
+              existing.telefone1     = updateData.telefone1;
+              existing.telefone2     = updateData.telefone2;
               existing.debtorImportKey = updateData.debtorImportKey;
-              // Só atualiza chargeImportKey se o registro não tinha um (encontrado via fallback de tolerância).
-              // Se já tem chargeImportKey, mantém o existente para evitar E11000 no índice único sparse.
-              if (!existing.chargeImportKey) {
-                existing.chargeImportKey = updateData.chargeImportKey;
-              }
+              if (!existing.chargeImportKey) existing.chargeImportKey = updateData.chargeImportKey;
               existing.importStatus = updateData.importStatus;
               existing.lastSeenBatch = updateData.lastSeenBatch;
               existing.exitedInBatch = null;
@@ -550,78 +520,64 @@ class SpreadsheetController {
                 created++;
               } catch (createErr) {
                 if (createErr.code === 11000) {
-                  // chargeImportKey já existe — o registro foi criado por outra linha nesta mesma importação
-                  // Faz update no existente em vez de criar duplicata
                   const dup = await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey: updateData.chargeImportKey });
                   if (dup) {
-                    dup.total     = updateData.total;
-                    dup.principal = updateData.principal;
-                    dup.juros     = updateData.juros;
-                    dup.multa     = updateData.multa;
-                    dup.lastSeenBatch = importBatch;
-                    dup.importStatus  = updateData.importStatus;
-                    await dup.save();
-                    updated++;
-                  } else {
-                    skippedDuplicates++;
-                  }
-                } else {
-                  throw createErr;
-                }
+                    dup.total = updateData.total; dup.principal = updateData.principal;
+                    dup.juros = updateData.juros; dup.multa = updateData.multa;
+                    dup.lastSeenBatch = importBatch; dup.importStatus = updateData.importStatus;
+                    await dup.save(); updated++;
+                  } else { skippedDuplicates++; }
+                } else { throw createErr; }
               }
             }
-          } else {
-            console.warn(`[Import] Linha ${i + 1} sem data de vencimento válida.`);
+          } catch (e) {
+            logger.error(`[Generic Import] Erro na linha ${i + 1}: ${e.message}`);
             errors++;
           }
-        } catch (e) {
-          logger.error(`[Generic Import] Erro na linha ${i + 1}: ${e.message}`);
-          errors++;
         }
-      }
 
-      const mongoose = require('mongoose');
-      for (const [key, previous] of previousDebtors.entries()) {
-        if (currentDebtorKeys.has(key)) continue;
-        const leadIds = [...previous.leadIds].map((id) => new mongoose.Types.ObjectId(id));
-        const exitQuery = {
-          user: userId,
-          status: { $ne: 'pago' },
-          importStatus: { $ne: 'saiu' },
-          ...(leadIds.length ? { lead: { $in: leadIds } } : { debtorImportKey: key })
-        };
-        const exitResult = await InadimplenciaDetalhe.updateMany(exitQuery, {
-          $set: {
-            importStatus: 'saiu',
-            exitedInBatch: importBatch,
-            debtorImportKey: key
-          },
-          $addToSet: { tags: 'saiu' }
+        const mongoose = require('mongoose');
+        for (const [key, previous] of previousDebtors.entries()) {
+          if (currentDebtorKeys.has(key)) continue;
+          const leadIds = [...previous.leadIds].map((id) => new mongoose.Types.ObjectId(id));
+          const exitQuery = {
+            user: userId,
+            status: { $ne: 'pago' },
+            importStatus: { $ne: 'saiu' },
+            ...(leadIds.length ? { lead: { $in: leadIds } } : { debtorImportKey: key })
+          };
+          const exitResult = await InadimplenciaDetalhe.updateMany(exitQuery, {
+            $set: { importStatus: 'saiu', exitedInBatch: importBatch, debtorImportKey: key },
+            $addToSet: { tags: 'saiu' }
+          });
+          if (exitResult.modifiedCount > 0) exitedDebtors++;
+        }
+
+        newDebtors = [...currentDebtorKeys].filter((key) => !previousDebtors.has(key)).length;
+
+        // Calcula total importado para diagnÃ³stico
+        const totalImportado = await InadimplenciaDetalhe.aggregate([
+          { $match: { user: new (require('mongoose').Types.ObjectId)(userId), importBatch } },
+          { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
+        ]);
+        const somaImportada = totalImportado[0]?.soma || 0;
+        const countImportado = totalImportado[0]?.count || 0;
+
+        logger.info(`[importGeneric] DONE: created=${created} updated=${updated} errors=${errors} soma=R$${somaImportada.toFixed(2)} count=${countImportado}`);
+
+        // Emite resultado final via socket
+        if (io) io.emit('spreadsheet-done', {
+          success: true, importBatch, created, updated, errors,
+          total: records.length, newDebtors, exitedDebtors, skippedDuplicates,
+          somaImportada: parseFloat(somaImportada.toFixed(2)), countImportado
         });
-        if (exitResult.modifiedCount > 0) exitedDebtors++;
+      } catch (e) {
+        logger.error('[importGeneric] Erro crÃ­tico no background:', e);
+        if (io) io.emit('spreadsheet-done', { success: false, error: e.message });
+      } finally {
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       }
-
-      newDebtors = [...currentDebtorKeys].filter((key) => !previousDebtors.has(key)).length;
-
-      // Finaliza progresso
-      if (io) io.emit('spreadsheet-progress', { percent: 100, status: 'finalizado' });
-      // Calcula o total efetivamente importado para diagnóstico
-      const totalImportado = await InadimplenciaDetalhe.aggregate([
-        { $match: { user: new (require('mongoose').Types.ObjectId)(userId), importBatch } },
-        { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
-      ]);
-      const somaImportada = totalImportado[0]?.soma || 0;
-      const countImportado = totalImportado[0]?.count || 0;
-
-      logger.info(`[importGeneric] Resultado: created=${created} updated=${updated} errors=${errors} skipped=${skippedDuplicates} total_registros=${records.length} soma_importada=R$${somaImportada.toFixed(2)} count_no_banco=${countImportado}`);
-
-      res.json({ success: true, importBatch, created, updated, errors, total: records.length, newDebtors, exitedDebtors, skippedDuplicates, somaImportada: parseFloat(somaImportada.toFixed(2)), countImportado });
-    } catch (e) {
-      logger.error('[importGeneric] Erro crítico:', e);
-      res.status(500).json({ message: `Erro ao processar a planilha: ${e.message}` });
-    } finally {
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    }
+    });
   }
 
   // ── 4. Listar registros agrupados por mês ────────────────────────────────────
@@ -683,7 +639,7 @@ class SpreadsheetController {
     }
   }
   
-  // ── 4b. Listar Devedores agrupados por Lead (Consolidado) ───────────────────
+  // â”€â”€ 4b. Listar Devedores agrupados por Lead (Consolidado) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async getDebtorsSummary(req, res) {
     try {
       const userId = req.user.id;
@@ -730,7 +686,7 @@ class SpreadsheetController {
             charges: { $push: "$$ROOT" }
           }
         },
-        // Populate Lead status (O lead é criado no importGeneric)
+        // Populate Lead status (O lead Ã© criado no importGeneric)
         {
           $lookup: {
             from: 'leads',
@@ -776,7 +732,7 @@ class SpreadsheetController {
     }
   }
 
-  // ── 5. Listar batches de importação ──────────────────────────────────────────
+  // â”€â”€ 5. Listar batches de importaÃ§Ã£o â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async getImportBatches(req, res) {
     try {
       const userId = req.user.id;
@@ -795,7 +751,7 @@ class SpreadsheetController {
     }
   }
 
-  // ── 5. Limpar Base de Dados do Usuário ──────────────────────────────────────
+  // â”€â”€ 5. Limpar Base de Dados do UsuÃ¡rio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async updateDebtorReportStatus(req, res) {
     try {
       const userId = req.user.id;
@@ -821,14 +777,14 @@ class SpreadsheetController {
       const userId = req.user.id;
       const mongoose = require('mongoose');
       const uid = new mongoose.Types.ObjectId(userId);
-      // Importações dinâmicas para evitar dependência circular se necessário
+      // ImportaÃ§Ãµes dinÃ¢micas para evitar dependÃªncia circular se necessÃ¡rio
       const Lead = require('../../utils/modelProvider').getModel('Lead');
       const InadimplenciaDetalhe = require('../../utils/modelProvider').getModel('InadimplenciaDetalhe');
       const Debt = require('../../utils/modelProvider').getModel('Debt');
       const Installment = require('../../utils/modelProvider').getModel('Installment');
       const Guarantor = require('../../utils/modelProvider').getModel('Guarantor');
       
-      logger.info(`[Spreadsheet] Limpando base de dados para usuário: ${userId}`);
+      logger.info(`[Spreadsheet] Limpando base de dados para usuÃ¡rio: ${userId}`);
       console.log(`--- [BACKEND] Limpando base para: ${userId} ---`);
       
       const [inadimplenciaLeadIds, contasLeadIds, spcLeadIds, debtDocs] = await Promise.all([
@@ -902,7 +858,7 @@ class SpreadsheetController {
     }
   }
 
-  // ── 6. Exportar Relatório de Devedores para PDF ──────────────────────────────
+  // â”€â”€ 6. Exportar RelatÃ³rio de Devedores para PDF â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async exportDebtorsReport(req, res) {
     try {
       const PDFDocument = require('pdfkit');
@@ -955,8 +911,8 @@ class SpreadsheetController {
       const secondaryColor = '#475569';
       const accentColor = '#ef4444';
 
-      // --- Cabeçalho ---
-      doc.fillColor(primaryColor).fontSize(24).font('Helvetica-Bold').text('QualifAI - Relatório de Cobrança', { align: 'center' });
+      // --- CabeÃ§alho ---
+      doc.fillColor(primaryColor).fontSize(24).font('Helvetica-Bold').text('QualifAI - RelatÃ³rio de CobranÃ§a', { align: 'center' });
       doc.fillColor(secondaryColor).fontSize(10).font('Helvetica').text(`Gerado em: ${format(new Date(), 'dd/mm/yyyy HH:mm:ss')}`, { align: 'center' });
       doc.moveDown(2);
 
@@ -1017,9 +973,9 @@ class SpreadsheetController {
         doc.fillColor(primaryColor).fontSize(14).font('Helvetica-Bold').text('DADOS DO DEVEDOR', { underline: true });
         doc.moveDown(0.5);
         
-        doc.fillColor('#000000').fontSize(11).font('Helvetica-Bold').text(`Nome: `, { continued: true }).font('Helvetica').text(d.cliente || '—');
-        doc.font('Helvetica-Bold').text(`CPF/CNPJ: `, { continued: true }).font('Helvetica').text(d.cpfCnpj || '—');
-        doc.font('Helvetica-Bold').text(`Empreendimento: `, { continued: true }).font('Helvetica').text(d.empreendimento || '—');
+        doc.fillColor('#000000').fontSize(11).font('Helvetica-Bold').text(`Nome: `, { continued: true }).font('Helvetica').text(d.cliente || 'â€”');
+        doc.font('Helvetica-Bold').text(`CPF/CNPJ: `, { continued: true }).font('Helvetica').text(d.cpfCnpj || 'â€”');
+        doc.font('Helvetica-Bold').text(`Empreendimento: `, { continued: true }).font('Helvetica').text(d.empreendimento || 'â€”');
         doc.font('Helvetica-Bold').text(`Status Atual: `, { continued: true }).font('Helvetica').text((d.leadInfo?.status || 'novo').toUpperCase());
         doc.font('Helvetica-Bold').text(`Status Manual: `, { continued: true }).font('Helvetica').text(d.leadInfo?.manualReportStatus || '---');
         doc.font('Helvetica-Bold').text(`Movimento Importacao: `, { continued: true }).font('Helvetica').text(formatImportStatus(d.importStatus));
@@ -1033,8 +989,8 @@ class SpreadsheetController {
         doc.font('Helvetica').text(`Total Principal: ${formatMoney(d.totalPrincipal)}  |  Total Corrigido: ${formatMoney(d.totalGeral)}`, doc.x, doc.y + 5);
         doc.moveDown(2.5);
 
-        // Histórico
-        doc.fillColor(primaryColor).fontSize(13).font('Helvetica-Bold').text('HISTÓRICO DE AÇÕES');
+        // HistÃ³rico
+        doc.fillColor(primaryColor).fontSize(13).font('Helvetica-Bold').text('HISTÃ“RICO DE AÃ‡Ã•ES');
         doc.moveTo(doc.x, doc.y).lineTo(550, doc.y).stroke(primaryColor);
         doc.moveDown(0.8);
 
@@ -1049,9 +1005,9 @@ class SpreadsheetController {
         // Helper para formatar moeda no PDF
         const pdfFmt = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
         
-        // Helper para traduzir método de pagamento
+        // Helper para traduzir mÃ©todo de pagamento
         const translateMethod = (m) => {
-          const map = { 'transfer': 'Transferência', 'pix': 'PIX', 'boleto': 'Boleto', 'card': 'Cartão', 'cash': 'Dinheiro' };
+          const map = { 'transfer': 'TransferÃªncia', 'pix': 'PIX', 'boleto': 'Boleto', 'card': 'CartÃ£o', 'cash': 'Dinheiro' };
           return map[m] || 'Sistema';
         };
 
@@ -1085,7 +1041,7 @@ class SpreadsheetController {
           const aProcessar = type === 'ultimo' ? [events[events.length-1]] : events;
           
           aProcessar.forEach(m => {
-            const dataStr = m.date ? format(new Date(m.date), 'dd/MM HH:mm:ss') : '—';
+            const dataStr = m.date ? format(new Date(m.date), 'dd/MM HH:mm:ss') : 'â€”';
             let roleStr = '';
             let textColor = '#334155';
             let labelColor = secondaryColor;
@@ -1106,7 +1062,7 @@ class SpreadsheetController {
             doc.moveDown(0.3);
           });
         } else {
-          doc.fillColor('#94a3b8').fontSize(10).font('Helvetica-Oblique').text('Nenhuma interação registrada até o momento.');
+          doc.fillColor('#94a3b8').fontSize(10).font('Helvetica-Oblique').text('Nenhuma interaÃ§Ã£o registrada atÃ© o momento.');
         }
 
         doc.moveDown(2);
@@ -1120,11 +1076,11 @@ class SpreadsheetController {
     }
   }
 
-  // ── 7. Diagnóstico de Duplicatas ─────────────────────────────────────────────
+  // â”€â”€ 7. DiagnÃ³stico de Duplicatas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /**
    * GET /spreadsheets/diagnose-duplicates
-   * Retorna grupos de registros duplicados para o usuário autenticado.
-   * Duplicata: mesmo lead + contrato + dia de vencimento com mais de 1 registro não pago.
+   * Retorna grupos de registros duplicados para o usuÃ¡rio autenticado.
+   * Duplicata: mesmo lead + contrato + dia de vencimento com mais de 1 registro nÃ£o pago.
    */
   async diagnoseDuplicates(req, res) {
     try {
@@ -1179,7 +1135,7 @@ class SpreadsheetController {
     }
   }
 
-  // ── 8. Correção de Duplicatas ─────────────────────────────────────────────────
+  // â”€â”€ 8. CorreÃ§Ã£o de Duplicatas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /**
    * POST /spreadsheets/fix-duplicates
    * Remove registros duplicados, mantendo o mais recente (por updatedAt) em cada grupo.
@@ -1215,7 +1171,7 @@ class SpreadsheetController {
         // Ordena do mais recente para o mais antigo
         const entries = group.ids.map((id, i) => ({ id, updatedAt: group.updatedAts[i] || new Date(0) }));
         entries.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-        // Mantém o primeiro (mais recente), remove os demais
+        // MantÃ©m o primeiro (mais recente), remove os demais
         entries.slice(1).forEach(e => idsToRemove.push(e.id));
       }
 
@@ -1225,7 +1181,7 @@ class SpreadsheetController {
 
       const result = await InadimplenciaDetalhe.deleteMany({ _id: { $in: idsToRemove } });
 
-      logger.info(`[fixDuplicates] Removidas ${result.deletedCount} duplicatas para usuário ${userId}`);
+      logger.info(`[fixDuplicates] Removidas ${result.deletedCount} duplicatas para usuÃ¡rio ${userId}`);
       res.json({
         success: true,
         removed: result.deletedCount,
