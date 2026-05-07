@@ -598,6 +598,58 @@ class SpreadsheetController {
 
         newDebtors = [...currentDebtorKeys].filter(k => !previousDebtors.has(k)).length;
 
+        // ── PASSO 6: Auto-correção de registros com lead=null ──────────────────
+        // Garante que todos os registros tenham um lead válido após o import
+        try {
+          const nullRecords = await InadimplenciaDetalhe.find({ user: new ObjectId(userId), lead: null })
+            .select('_id cpfCnpj cliente empreendimento').lean();
+          if (nullRecords.length > 0) {
+            logger.warn('[importGeneric] ' + nullRecords.length + ' registros com lead=null. Corrigindo...');
+            const seenFix = new Map();
+            for (const rec of nullRecords) {
+              const clientKey = (rec.cpfCnpj || '') + '_' + (rec.cliente || '');
+              if (seenFix.has(clientKey)) {
+                await InadimplenciaDetalhe.updateMany(
+                  { user: new ObjectId(userId), lead: null, cpfCnpj: rec.cpfCnpj, cliente: rec.cliente },
+                  { $set: { lead: seenFix.get(clientKey) } }
+                );
+                continue;
+              }
+              const docNorm = rec.cpfCnpj ? String(rec.cpfCnpj).replace(/\D/g, '') : null;
+              let fixedLead = null;
+              if (docNorm) fixedLead = await Lead.findOne({ user: new ObjectId(userId), taxId: docNorm }).select('_id').lean();
+              if (!fixedLead && docNorm) fixedLead = await Lead.findOne({ user: new ObjectId(userId), email: docNorm + '@importado.local' }).select('_id').lean();
+              if (!fixedLead) {
+                try {
+                  const created = await Lead.create({
+                    user: new ObjectId(userId),
+                    name: rec.cliente || docNorm || 'Devedor Importado',
+                    email: docNorm ? docNorm + '@importado.local' : 'fix_' + Date.now() + '_' + Math.random().toString(36).slice(2) + '@importado.local',
+                    taxId: docNorm,
+                    company: rec.empreendimento || 'Importado',
+                    source: 'form', status: 'novo', tags: ['novo'],
+                  });
+                  fixedLead = created;
+                } catch (dupErr) {
+                  if (dupErr.code === 11000 && docNorm) {
+                    fixedLead = await Lead.findOne({ user: new ObjectId(userId), taxId: docNorm }).select('_id').lean();
+                  }
+                }
+              }
+              if (fixedLead) {
+                seenFix.set(clientKey, fixedLead._id);
+                await InadimplenciaDetalhe.updateMany(
+                  { user: new ObjectId(userId), lead: null, cpfCnpj: rec.cpfCnpj, cliente: rec.cliente },
+                  { $set: { lead: fixedLead._id } }
+                );
+              }
+            }
+            logger.info('[importGeneric] Auto-fix lead=null concluído.');
+          }
+        } catch (fixErr) {
+          logger.error('[importGeneric] Erro no auto-fix de lead=null: ' + fixErr.message);
+        }
+
         // ── Totais reais da carteira completa (não apenas do batch atual) ──────
         const [totaisBatch, totaisCarteira] = await Promise.all([
           // Soma apenas do batch importado agora (novos + atualizados)
