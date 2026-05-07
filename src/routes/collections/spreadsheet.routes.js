@@ -27,18 +27,18 @@ const upload = multer({
 router.post('/import/generic', auth, upload.single('file'), spreadsheetController.importGeneric);
 
 // ── Semestre / Batches ──────────────────────────────────────────────────────────
-router.get('/debtors',       auth, spreadsheetController.getDebtorsSummary);
-router.get('/totals',         auth, spreadsheetController.getCarteiraTotals);
+router.get('/debtors', auth, spreadsheetController.getDebtorsSummary);
+router.get('/totals', auth, spreadsheetController.getCarteiraTotals);
 
 router.get('/export/debtors', auth, spreadsheetController.exportDebtorsReport);
-router.get('/by-month',       auth, spreadsheetController.getByMonth);
+router.get('/by-month', auth, spreadsheetController.getByMonth);
 router.get('/import-batches', auth, spreadsheetController.getImportBatches);
 router.put('/debtors/:leadId/report-status', auth, spreadsheetController.updateDebtorReportStatus);
-router.delete('/clear',       auth, spreadsheetController.clearData);
+router.delete('/clear', auth, spreadsheetController.clearData);
 
 // ── Diagnóstico e Correção de Duplicatas ────────────────────────────────────
-router.get('/diagnose-duplicates',  auth, spreadsheetController.diagnoseDuplicates);
-router.post('/fix-duplicates',      auth, spreadsheetController.fixDuplicates);
-router.post('/fix-null-leads',      auth, spreadsheetController.fixNullLeads);
+router.get('/diagnose-duplicates', auth, spreadsheetController.diagnoseDuplicates);
+router.post('/fix-duplicates', auth, spreadsheetController.fixDuplicates);
+router.post('/fix-null-leads', auth, spreadsheetController.fixNullLeads);
 
 module.exports = router;
