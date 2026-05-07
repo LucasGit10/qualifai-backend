@@ -168,6 +168,33 @@ const getDebtorImportKeyFromRow = (row) => getDebtorImportKey({
   cliente: col(row, 'Cliente', 'CLIENTE', 'NOME', 'Razao', 'Nome do Cliente')
 });
 
+const getDateKey = (date) => {
+  if (!date) return '';
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+};
+
+const normalizeKeyPart = (value) => normalizeText(value).replace(/[|]/g, '');
+
+const getChargeImportKey = ({ debtorImportKey, contrato, vencimento, esp, elemento, parcela, taxaExtra }) => [
+  debtorImportKey,
+  normalizeKeyPart(contrato),
+  getDateKey(vencimento),
+  normalizeKeyPart(esp),
+  normalizeKeyPart(elemento),
+  parcela || '',
+  normalizeKeyPart(taxaExtra)
+].join('|');
+
+const getDateRange = (date) => {
+  const start = new Date(date);
+  start.setUTCHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
+};
+
 const formatImportStatus = (status) => {
   const map = {
     novo: 'Novo na importacao',
@@ -278,7 +305,8 @@ class SpreadsheetController {
         if (row.lead) previousDebtors.get(key).leadIds.add(String(row.lead));
       });
       const currentDebtorKeys = new Set(records.map(getDebtorImportKeyFromRow).filter(Boolean));
-      let created = 0, updated = 0, errors = 0, newDebtors = 0, exitedDebtors = 0;
+      const importedChargeKeys = new Set();
+      let created = 0, updated = 0, errors = 0, newDebtors = 0, exitedDebtors = 0, skippedDuplicates = 0;
       let lastPercent = 0;
 
       for (let i = 0; i < records.length; i++) {
@@ -324,12 +352,25 @@ class SpreadsheetController {
           const elemento = col(row, 'Elemento', 'ELEMENTO') || null;
           const parcela = parseInt(col(row, 'Parcela', 'PARCELA') || '0') || null;
           const taxaExtra = col(row, 'Taxa Extra', 'TAXA_EXTRA', 'TaxaExtra') || null;
+          const chargeImportKey = getChargeImportKey({ debtorImportKey, contrato, vencimento, esp, elemento, parcela, taxaExtra });
+
+          if (!vencimento) {
+            console.warn(`[Import] Linha ${i + 1} sem data de vencimento vÃ¡lida.`);
+            errors++;
+            continue;
+          }
+
+          if (importedChargeKeys.has(chargeImportKey)) {
+            skippedDuplicates++;
+            continue;
+          }
+          importedChargeKeys.add(chargeImportKey);
 
           const matchQuery = {
             user: userId,
             lead: lead?._id,
             contrato: contrato || '',
-            vencimento: vencimento,
+            vencimento,
             esp,
             elemento,
             parcela,
@@ -354,6 +395,7 @@ class SpreadsheetController {
             telefone2:           col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
             parcela,
             debtorImportKey,
+            chargeImportKey,
             importStatus: rowImportStatus,
             lastSeenBatch: importBatch,
             exitedInBatch: null,
@@ -365,12 +407,17 @@ class SpreadsheetController {
           };
 
           if (vencimento) {
-            const existing = await InadimplenciaDetalhe.findOne(matchQuery);
+            const { start, end } = getDateRange(vencimento);
+            const existing = await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey })
+              || await InadimplenciaDetalhe.findOne({
+                ...matchQuery,
+                vencimento: { $gte: start, $lt: end }
+              });
             if (existing) {
                 const previousFirstSeenBatch = existing.firstSeenBatch || existing.importBatch || importBatch;
                 // Se for o MESMO batch de importação, nós SOMAMOS (para suportar múltiplas linhas do mesmo item na mesma planilha)
                 // Se for um batch DIFERENTE (ex: re-importação), nós SOBRESCREVEMOS (para atualizar com a planilha mais recente)
-                if (existing.importBatch === updateData.importBatch) {
+                if (false && existing.importBatch === updateData.importBatch) {
                     existing.principal = (existing.principal || 0) + updateData.principal;
                     existing.juros     = (existing.juros || 0) + updateData.juros;
                     existing.multa     = (existing.multa || 0) + updateData.multa;
@@ -393,9 +440,11 @@ class SpreadsheetController {
                     existing.rg            = updateData.rg;
                     existing.profissao     = updateData.profissao;
                     existing.telefone1     = updateData.telefone1;
+                    existing.telefone2     = updateData.telefone2;
                 }
 
               existing.debtorImportKey = updateData.debtorImportKey;
+              existing.chargeImportKey = updateData.chargeImportKey;
               existing.importStatus = updateData.importStatus;
               existing.lastSeenBatch = updateData.lastSeenBatch;
               existing.exitedInBatch = null;
@@ -441,7 +490,7 @@ class SpreadsheetController {
 
       // Finaliza progresso
       if (io) io.emit('spreadsheet-progress', { percent: 100, status: 'finalizado' });
-      res.json({ success: true, importBatch, created, updated, errors, total: records.length, newDebtors, exitedDebtors });
+      res.json({ success: true, importBatch, created, updated, errors, total: records.length, newDebtors, exitedDebtors, skippedDuplicates });
     } catch (e) {
       logger.error('[importGeneric] Erro crítico:', e);
       res.status(500).json({ message: `Erro ao processar a planilha: ${e.message}` });

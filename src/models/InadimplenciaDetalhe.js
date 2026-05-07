@@ -11,6 +11,7 @@ const inadimplenciaDetalheSchema = new mongoose.Schema({
   importBatch: { type: String, trim: true },   // ex: "2025-04_inadimplencia.xlsx"
   arquivoOrigem: { type: String, trim: true }, // "INADIMPLENCIA_DETALHADO" | "PLAN1"
   debtorImportKey: { type: String, trim: true },
+  chargeImportKey: { type: String, trim: true },
   firstSeenBatch: { type: String, trim: true },
   lastSeenBatch: { type: String, trim: true },
   exitedInBatch: { type: String, trim: true },
@@ -80,6 +81,7 @@ inadimplenciaDetalheSchema.index({ user: 1, atraso: 1 });
 inadimplenciaDetalheSchema.index({ user: 1, empreendimento: 1 });
 inadimplenciaDetalheSchema.index({ importBatch: 1 });
 inadimplenciaDetalheSchema.index({ user: 1, debtorImportKey: 1 });
+inadimplenciaDetalheSchema.index({ user: 1, chargeImportKey: 1 }, { unique: true, sparse: true });
 inadimplenciaDetalheSchema.index({ user: 1, importStatus: 1 });
 
 module.exports = mongoose.model('InadimplenciaDetalhe', inadimplenciaDetalheSchema);
