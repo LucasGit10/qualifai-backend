@@ -495,6 +495,11 @@ class SpreadsheetController {
                               || debtByFallback.get(fbKey);
 
             if (existingDebt) {
+              // REMOVE o documento dos mapas para que ele não seja usado por outra linha duplicada
+              if (existingDebt.chargeImportKey) debtByChargeKey.delete(existingDebt.chargeImportKey);
+              debtByChargeKey.delete(chargeBaseKey);
+              debtByFallback.delete(fbKey);
+
               const setFields = Object.assign({}, updateFields);
               if (!existingDebt.chargeImportKey) setFields.chargeImportKey = chargeImportKey;
               debtBulkOps.push({
