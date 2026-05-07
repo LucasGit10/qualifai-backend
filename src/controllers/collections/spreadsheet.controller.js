@@ -388,7 +388,7 @@ class SpreadsheetController {
 
         // ── PASSO 2: Carrega todos os registros de dívida existentes em memória (1 query) ─
         const existingDebts = await InadimplenciaDetalhe.find({ user: userId }).select(
-          '_id chargeImportKey lead contrato vencimento esp elemento parcela status importStatus firstSeenBatch importBatch cpfCnpj cliente'
+          '_id chargeImportKey lead contrato vencimento esp elemento parcela taxaExtra status importStatus firstSeenBatch importBatch cpfCnpj cliente'
         ).lean();
 
         // Índices para match rápido em memória
@@ -396,7 +396,7 @@ class SpreadsheetController {
         const debtByFallback  = new Map();  // fallback key -> debt
         existingDebts.forEach(d => {
           if (d.chargeImportKey) debtByChargeKey.set(d.chargeImportKey, d);
-          const fbKey = String(d.lead) + '|' + (d.contrato || '') + '|' + (d.vencimento ? new Date(d.vencimento).toISOString().slice(0,10) : '') + '|' + (d.esp||'') + '|' + (d.elemento||'') + '|' + (d.parcela||'');
+          const fbKey = String(d.lead) + '|' + (d.contrato || '') + '|' + (d.vencimento ? new Date(d.vencimento).toISOString().slice(0,10) : '') + '|' + (d.esp || '') + '|' + (d.elemento || '') + '|' + (d.parcela || '') + '|' + (d.taxaExtra || '');
           if (!debtByFallback.has(fbKey)) debtByFallback.set(fbKey, d);
         });
 
@@ -466,7 +466,7 @@ class SpreadsheetController {
             const chargeBaseKey = getChargeImportKey({ debtorImportKey, contrato, vencimento, esp, elemento, parcela: parcelaRaw || parcela, taxaExtra });
             const chargeImportKey = getNextOccurrenceKey(chargeOccurrences, chargeBaseKey);
             const dateKey = vencimento.toISOString().slice(0,10);
-            const fbKey   = String(lead._id) + '|' + (contrato || '') + '|' + dateKey + '|' + (esp||'') + '|' + (elemento||'') + '|' + (parcela||'');
+            const fbKey = String(lead._id) + '|' + (contrato || '') + '|' + dateKey + '|' + (esp || '') + '|' + (elemento || '') + '|' + (parcela || '') + '|' + (taxaExtra || '');
 
             const updateFields = {
               importBatch, arquivoOrigem,
@@ -500,8 +500,7 @@ class SpreadsheetController {
               debtByChargeKey.delete(chargeBaseKey);
               debtByFallback.delete(fbKey);
 
-              const setFields = Object.assign({}, updateFields);
-              if (!existingDebt.chargeImportKey) setFields.chargeImportKey = chargeImportKey;
+              const setFields = Object.assign({}, updateFields, { chargeImportKey });
               debtBulkOps.push({
                 updateOne: {
                   filter: { _id: existingDebt._id },
@@ -528,7 +527,6 @@ class SpreadsheetController {
               });
               const newDoc = { chargeImportKey, lead: lead._id, contrato: contrato||'', vencimento, esp, elemento, parcela };
               debtByChargeKey.set(chargeImportKey, newDoc);
-              debtByFallback.set(fbKey, newDoc);
               created++;
             } else {
               skippedDuplicates++;
