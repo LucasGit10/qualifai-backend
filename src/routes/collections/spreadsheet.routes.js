@@ -37,5 +37,6 @@ router.delete('/clear',       auth, spreadsheetController.clearData);
 // ── Diagnóstico e Correção de Duplicatas ────────────────────────────────────
 router.get('/diagnose-duplicates',  auth, spreadsheetController.diagnoseDuplicates);
 router.post('/fix-duplicates',      auth, spreadsheetController.fixDuplicates);
+router.post('/fix-null-leads',      auth, spreadsheetController.fixNullLeads);
 
 module.exports = router;
