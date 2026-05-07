@@ -660,9 +660,9 @@ class SpreadsheetController {
             { $match: { user: new ObjectId(userId), importBatch } },
             { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
           ]),
-          // Soma total real da carteira (todos status exceto pago)
+          // Soma total real da carteira vigente (exclui pagos e registros que sairam da ultima comparacao)
           InadimplenciaDetalhe.aggregate([
-            { $match: { user: new ObjectId(userId), status: { $ne: 'pago' } } },
+            { $match: { user: new ObjectId(userId), status: { $ne: 'pago' }, importStatus: { $ne: 'saiu' } } },
             { $group: { _id: null, soma: { $sum: '$total' }, somaPrincipal: { $sum: '$principal' }, count: { $sum: 1 } } }
           ])
         ]);
@@ -711,7 +711,11 @@ class SpreadsheetController {
       if (empreendimento) matchStage.empreendimento = { $regex: empreendimento, $options: 'i' };
 
       const pipeline = [
-        { $match: { user: new (require('mongoose').Types.ObjectId)(userId), ...(empreendimento ? { empreendimento: new RegExp(empreendimento, 'i') } : {}) } },
+        { $match: {
+          user: new (require('mongoose').Types.ObjectId)(userId),
+          ...(tipo === 'inadimplencia' ? { importStatus: { $ne: 'saiu' } } : {}),
+          ...(empreendimento ? { empreendimento: new RegExp(empreendimento, 'i') } : {})
+        } },
         ...(ano ? [{ $match: { [dateField]: { $gte: new Date(`${ano}-01-01`), $lt: new Date(`${parseInt(ano) + 1}-01-01`) } } }] : []),
         {
           $group: {
@@ -761,7 +765,7 @@ class SpreadsheetController {
 
       const [totais, porStatus, nullLeadInfo] = await Promise.all([
         InadimplenciaDetalhe.aggregate([
-          { $match: { user: uid, status: { $ne: 'pago' } } },
+          { $match: { user: uid, status: { $ne: 'pago' }, importStatus: { $ne: 'saiu' } } },
           { $group: {
             _id: null,
             somaTotal:     { $sum: '$total' },
@@ -772,11 +776,11 @@ class SpreadsheetController {
           }}
         ]),
         InadimplenciaDetalhe.aggregate([
-          { $match: { user: uid, status: { $ne: 'pago' } } },
+          { $match: { user: uid, status: { $ne: 'pago' }, importStatus: { $ne: 'saiu' } } },
           { $group: { _id: '$importStatus', soma: { $sum: '$total' }, count: { $sum: 1 } } }
         ]),
         InadimplenciaDetalhe.aggregate([
-          { $match: { user: uid, lead: null, status: { $ne: 'pago' } } },
+          { $match: { user: uid, lead: null, status: { $ne: 'pago' }, importStatus: { $ne: 'saiu' } } },
           { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
         ])
       ]);
