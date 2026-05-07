@@ -369,181 +369,195 @@ class SpreadsheetController {
     res.status(202).json({ success: true, importBatch, total: records.length, message: 'ImportaÃ§Ã£o iniciada em background.' });
 
     // â”€â”€â”€ Processamento em background â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ─── Processamento em background (bulk) ─────────────────────────────────
     setImmediate(async () => {
+      const mongoose = require('mongoose');
+      const ObjectId = mongoose.Types.ObjectId;
       let created = 0, updated = 0, errors = 0, newDebtors = 0, exitedDebtors = 0, skippedDuplicates = 0;
       try {
-        const previousRows = await InadimplenciaDetalhe.find({
-          user: userId,
-          status: { $ne: 'pago' },
-          importStatus: { $ne: 'saiu' }
-        }).select('lead cpfCnpj cliente').lean();
-        const previousDebtors = new Map();
-        previousRows.forEach((row) => {
-          const key = getDebtorImportKey({ cpfCnpj: row.cpfCnpj, cliente: row.cliente, lead: row.lead });
-          if (!key) return;
-          if (!previousDebtors.has(key)) previousDebtors.set(key, { leadIds: new Set(), cpfCnpj: row.cpfCnpj, cliente: row.cliente });
-          if (row.lead) previousDebtors.get(key).leadIds.add(String(row.lead));
+        if (io) io.emit('spreadsheet-progress', { percent: 2, current: 0, total: records.length, status: 'extraindo' });
+
+        // ── PASSO 1: Carrega todos os leads do usuário em memória (1 query) ──────────────
+        const existingLeads = await Lead.find({ user: userId }).select('_id taxId email name phone company contacts').lean();
+        const leadByTaxId = new Map();
+        const leadByEmail = new Map();
+        existingLeads.forEach(l => {
+          if (l.taxId) leadByTaxId.set(l.taxId, l);
+          if (l.email) leadByEmail.set(l.email, l);
         });
+
+        // ── PASSO 2: Carrega todos os registros de dívida existentes em memória (1 query) ─
+        const existingDebts = await InadimplenciaDetalhe.find({ user: userId }).select(
+          '_id chargeImportKey lead contrato vencimento esp elemento parcela status importStatus firstSeenBatch importBatch cpfCnpj cliente'
+        ).lean();
+
+        // Índices para match rápido em memória
+        const debtByChargeKey = new Map();  // chargeImportKey -> debt
+        const debtByFallback  = new Map();  // fallback key -> debt
+        existingDebts.forEach(d => {
+          if (d.chargeImportKey) debtByChargeKey.set(d.chargeImportKey, d);
+          const fbKey = String(d.lead) + '|' + (d.contrato || '') + '|' + (d.vencimento ? new Date(d.vencimento).toISOString().slice(0,10) : '') + '|' + (d.esp||'') + '|' + (d.elemento||'') + '|' + (d.parcela||'');
+          if (!debtByFallback.has(fbKey)) debtByFallback.set(fbKey, d);
+        });
+
+        // previousDebtors para lógica de "saiu"
+        const previousDebtors = new Map();
+        existingDebts.filter(d => d.status !== 'pago' && d.importStatus !== 'saiu').forEach(d => {
+          const key = getDebtorImportKey({ cpfCnpj: d.cpfCnpj, cliente: d.cliente, lead: d.lead });
+          if (!key) return;
+          if (!previousDebtors.has(key)) previousDebtors.set(key, { leadIds: new Set(), cpfCnpj: d.cpfCnpj, cliente: d.cliente });
+          if (d.lead) previousDebtors.get(key).leadIds.add(String(d.lead));
+        });
+
+        if (io) io.emit('spreadsheet-progress', { percent: 10, current: 0, total: records.length, status: 'extraindo' });
+
+        // ── PASSO 3: Processa cada linha em memória ─────────────────────────────────────
         const currentDebtorKeys = new Set(records.map(getDebtorImportKeyFromRow).filter(Boolean));
         const chargeOccurrences = new Map();
-        let lastPercent = 0;
+        const leadsToCreate = [];
+        const debtBulkOps   = [];
+        const seenChargeKeys = new Set();
 
         for (let i = 0; i < records.length; i++) {
-          const row = records[i];
           try {
-            // Progresso via Socket
-            const currentPercent = Math.round(((i + 1) / records.length) * 100);
-            if (currentPercent > lastPercent || (i + 1) % 10 === 0) {
-              lastPercent = currentPercent;
-              if (io) io.emit('spreadsheet-progress', { percent: currentPercent, current: i + 1, total: records.length, status: 'extraindo' });
-            }
-            const cpfCnpj  = col(row, 'CPF/CNPJ', 'CPF', 'CNPJ', 'cpfCnpj', 'Documento');
-            const clienteNome = col(row, 'Cliente', 'CLIENTE', 'NOME', 'RazÃ£o', 'Razao', 'Nome do Cliente');
-            const contrato = col(row, 'Contrato', 'CONTRATO', 'NÃºmero do Contrato');
-            const vencimentoRaw = col(row, 'Vencimento', 'VENCIMENTO', 'DATA_VENCIMENTO', 'Data do Vencimento');
-            const vencimento = parseDate(vencimentoRaw);
+            const row = records[i];
+            const cpfCnpj     = col(row, 'CPF/CNPJ', 'CPF', 'CNPJ', 'cpfCnpj', 'Documento');
+            const clienteNome = col(row, 'Cliente', 'CLIENTE', 'NOME', 'Razao', 'Nome do Cliente');
+            const contrato    = col(row, 'Contrato', 'CONTRATO', 'Numero do Contrato');
+            const vencimento  = parseDate(col(row, 'Vencimento', 'VENCIMENTO', 'DATA_VENCIMENTO', 'Data do Vencimento'));
 
             if (!clienteNome && !cpfCnpj) { errors++; continue; }
-            if (!vencimento) {
-              console.warn(`[Import] Linha ${i + 1} sem data de vencimento valida.`);
-              errors++; continue;
-            }
+            if (!vencimento) { errors++; continue; }
 
             const debtorImportKey = getDebtorImportKey({ cpfCnpj, cliente: clienteNome });
             const rowImportStatus = previousDebtors.has(debtorImportKey) ? 'mantido' : 'novo';
 
-            const lead = await findOrCreateLead(userId, {
-              cpfCnpj,
-              nome: clienteNome,
-              email: col(row, 'E-mail', 'Email', 'EMAIL'),
-              telefone: col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
-              telefone2: col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
-              empresa:  col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa'),
-            });
+            // Resolve Lead em memória
+            const docNorm = cpfCnpj ? String(cpfCnpj).replace(/\D/g, '') : null;
+            const emailInput = col(row, 'E-mail', 'Email', 'EMAIL');
+            const generatedEmail = emailInput ? emailInput.toLowerCase() : (docNorm ? docNorm + '@importado.local' : null);
 
-            const esp = col(row, 'Esp', 'ESP') || null;
-            const elemento = col(row, 'Elemento', 'ELEMENTO') || null;
+            let lead = (docNorm ? leadByTaxId.get(docNorm) : null)
+                    || (generatedEmail ? leadByEmail.get(generatedEmail) : null);
+
+            if (!lead) {
+              const tempId = new ObjectId();
+              const newLead = {
+                _id: tempId,
+                user: new ObjectId(userId),
+                name: clienteNome || cpfCnpj || 'Devedor Importado',
+                email: generatedEmail || ('extra_' + Date.now() + '_' + i + '@importado.local'),
+                taxId: docNorm,
+                phone: normalizePhone(col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1')) || null,
+                company: col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa') || 'Importado',
+                source: 'form', status: 'novo', tags: ['novo'], contacts: []
+              };
+              leadsToCreate.push(newLead);
+              if (docNorm) leadByTaxId.set(docNorm, newLead);
+              if (generatedEmail) leadByEmail.set(generatedEmail, newLead);
+              lead = newLead;
+            }
+
+            const esp       = col(row, 'Esp', 'ESP') || null;
+            const elemento  = col(row, 'Elemento', 'ELEMENTO') || null;
             const parcelaRaw = col(row, 'Parcela', 'PARCELA');
-            const parcela = parseInt(parcelaRaw || '0') || null;
+            const parcela   = parseInt(parcelaRaw || '0') || null;
             const taxaExtra = col(row, 'Taxa Extra', 'TAXA_EXTRA', 'TaxaExtra') || null;
             const chargeBaseKey = getChargeImportKey({ debtorImportKey, contrato, vencimento, esp, elemento, parcela: parcelaRaw || parcela, taxaExtra });
             const chargeImportKey = getNextOccurrenceKey(chargeOccurrences, chargeBaseKey);
+            const dateKey = vencimento.toISOString().slice(0,10);
+            const fbKey   = String(lead._id) + '|' + (contrato || '') + '|' + dateKey + '|' + (esp||'') + '|' + (elemento||'') + '|' + (parcela||'');
 
-            const matchQuery = {
-              user: userId,
-              lead: lead?._id,
-              contrato: contrato || '',
-              vencimento,
-              esp,
-              elemento,
-              parcela,
-              taxaExtra
-            };
-
-            const updateData = {
-              importBatch,
-              arquivoOrigem,
-              cliente:             clienteNome,
-              empreendimento:      col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa'),
-              torre:               col(row, 'Torre', 'TORRE'),
-              apto:                col(row, 'Apto', 'APTO'),
-              esp,
-              elemento,
-              taxaExtra,
-              rf:                  col(row, 'R/F', 'RF'),
-              rg:                  col(row, 'RG', 'Rg'),
-              profissao:           col(row, 'ProfissÃ£o', 'Profissao', 'PROFISSAO'),
+            const updateFields = {
+              importBatch, arquivoOrigem,
+              cliente: clienteNome,
+              empreendimento: col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa'),
+              torre: col(row, 'Torre', 'TORRE'),
+              apto:  col(row, 'Apto', 'APTO'),
+              esp, elemento, taxaExtra,
+              rf:    col(row, 'R/F', 'RF'),
+              rg:    col(row, 'RG', 'Rg'),
+              profissao: col(row, 'Profissao', 'PROFISSAO'),
               cpfCnpj,
-              telefone1:           col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
-              telefone2:           col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
-              parcela,
-              debtorImportKey,
-              chargeImportKey,
-              importStatus: rowImportStatus,
-              lastSeenBatch: importBatch,
-              exitedInBatch: null,
-              atraso:  parseInt(col(row, 'Atraso', 'ATRASO', 'Atraso (dias)') || '0') || 0,
+              telefone1: col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
+              telefone2: col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
+              parcela, debtorImportKey,
+              importStatus: rowImportStatus, lastSeenBatch: importBatch, exitedInBatch: null,
+              atraso:    parseInt(col(row, 'Atraso', 'ATRASO', 'Atraso (dias)') || '0') || 0,
               principal: parseDecimal(col(row, 'Principal', 'PRINCIPAL')),
               juros:     parseDecimal(col(row, 'Juros', 'Juros de Mora', 'JUROS')),
               multa:     parseDecimal(col(row, 'Multa', 'MULTA')),
               total:     parseDecimal(col(row, 'Total', 'TOTAL', 'Valor')),
             };
 
-            const { start, end } = getDateRange(vencimento);
-            const existing = await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey })
-              || await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey: chargeBaseKey })
-              || await InadimplenciaDetalhe.findOne({
-                ...matchQuery,
-                chargeImportKey: { $in: [null, ''] },
-                vencimento: { $gte: start, $lt: end }
-              })
-              || await InadimplenciaDetalhe.findOne({
-                user: userId,
-                lead: lead?._id,
-                contrato: contrato || '',
-                vencimento: { $gte: start, $lt: end },
-                esp: esp ?? null,
-                elemento: elemento ?? null,
-                parcela: parcela ?? null,
-                status: { $ne: 'pago' }
-              });
+            const existingDebt = debtByChargeKey.get(chargeImportKey)
+                              || debtByChargeKey.get(chargeBaseKey)
+                              || debtByFallback.get(fbKey);
 
-            if (existing) {
-              const previousFirstSeenBatch = existing.firstSeenBatch || existing.importBatch || importBatch;
-              existing.principal = updateData.principal;
-              existing.juros     = updateData.juros;
-              existing.multa     = updateData.multa;
-              existing.total     = updateData.total;
-              existing.importBatch   = updateData.importBatch;
-              existing.arquivoOrigem = updateData.arquivoOrigem;
-              existing.atraso        = updateData.atraso;
-              existing.cliente       = updateData.cliente;
-              existing.empreendimento = updateData.empreendimento;
-              existing.torre         = updateData.torre;
-              existing.apto          = updateData.apto;
-              existing.rf            = updateData.rf;
-              existing.rg            = updateData.rg;
-              existing.profissao     = updateData.profissao;
-              existing.telefone1     = updateData.telefone1;
-              existing.telefone2     = updateData.telefone2;
-              existing.debtorImportKey = updateData.debtorImportKey;
-              if (!existing.chargeImportKey) existing.chargeImportKey = updateData.chargeImportKey;
-              existing.importStatus = updateData.importStatus;
-              existing.lastSeenBatch = updateData.lastSeenBatch;
-              existing.exitedInBatch = null;
-              existing.firstSeenBatch = previousFirstSeenBatch;
-              await existing.save();
+            if (existingDebt) {
+              const setFields = Object.assign({}, updateFields);
+              if (!existingDebt.chargeImportKey) setFields.chargeImportKey = chargeImportKey;
+              debtBulkOps.push({
+                updateOne: {
+                  filter: { _id: existingDebt._id },
+                  update: { $set: setFields }
+                }
+              });
+              if (!existingDebt.chargeImportKey) debtByChargeKey.set(chargeImportKey, existingDebt);
               updated++;
+            } else if (!seenChargeKeys.has(chargeImportKey)) {
+              seenChargeKeys.add(chargeImportKey);
+              debtBulkOps.push({
+                insertOne: {
+                  document: Object.assign({
+                    _id: new ObjectId(),
+                    user: new ObjectId(userId),
+                    lead: lead._id,
+                    contrato: contrato || '',
+                    vencimento, esp, elemento, parcela, taxaExtra,
+                    chargeImportKey,
+                    firstSeenBatch: importBatch,
+                    tags: rowImportStatus === 'novo' ? ['novo'] : []
+                  }, updateFields)
+                }
+              });
+              const newDoc = { chargeImportKey, lead: lead._id, contrato: contrato||'', vencimento, esp, elemento, parcela };
+              debtByChargeKey.set(chargeImportKey, newDoc);
+              debtByFallback.set(fbKey, newDoc);
+              created++;
             } else {
-              try {
-                await InadimplenciaDetalhe.create({ ...matchQuery, ...updateData, firstSeenBatch: importBatch, tags: rowImportStatus === 'novo' ? ['novo'] : [] });
-                created++;
-              } catch (createErr) {
-                if (createErr.code === 11000) {
-                  const dup = await InadimplenciaDetalhe.findOne({ user: userId, chargeImportKey: updateData.chargeImportKey });
-                  if (dup) {
-                    dup.total = updateData.total; dup.principal = updateData.principal;
-                    dup.juros = updateData.juros; dup.multa = updateData.multa;
-                    dup.lastSeenBatch = importBatch; dup.importStatus = updateData.importStatus;
-                    await dup.save(); updated++;
-                  } else { skippedDuplicates++; }
-                } else { throw createErr; }
-              }
+              skippedDuplicates++;
             }
           } catch (e) {
-            logger.error(`[Generic Import] Erro na linha ${i + 1}: ${e.message}`);
+            logger.error('[Generic Import] Erro na linha ' + (i + 1) + ': ' + e.message);
             errors++;
+          }
+
+          if ((i + 1) % 100 === 0 || i === records.length - 1) {
+            const pct = Math.round(10 + ((i + 1) / records.length) * 80);
+            if (io) io.emit('spreadsheet-progress', { percent: pct, current: i + 1, total: records.length, status: 'extraindo' });
           }
         }
 
-        const mongoose = require('mongoose');
+        if (io) io.emit('spreadsheet-progress', { percent: 90, current: records.length, total: records.length, status: 'extraindo' });
+
+        // ── PASSO 4: Persiste em batch ──────────────────────────────────────────────────
+        if (leadsToCreate.length > 0) {
+          try { await Lead.insertMany(leadsToCreate, { ordered: false }); }
+          catch (e) { if (e.code !== 11000) throw e; }
+        }
+
+        const BATCH = 500;
+        for (let b = 0; b < debtBulkOps.length; b += BATCH) {
+          await InadimplenciaDetalhe.bulkWrite(debtBulkOps.slice(b, b + BATCH), { ordered: false });
+        }
+
+        // ── PASSO 5: Marca devedores que saíram ────────────────────────────────────────
         for (const [key, previous] of previousDebtors.entries()) {
           if (currentDebtorKeys.has(key)) continue;
-          const leadIds = [...previous.leadIds].map((id) => new mongoose.Types.ObjectId(id));
+          const leadIds = [...previous.leadIds].map(id => new ObjectId(id));
           const exitQuery = {
-            user: userId,
-            status: { $ne: 'pago' },
-            importStatus: { $ne: 'saiu' },
+            user: new ObjectId(userId), status: { $ne: 'pago' }, importStatus: { $ne: 'saiu' },
             ...(leadIds.length ? { lead: { $in: leadIds } } : { debtorImportKey: key })
           };
           const exitResult = await InadimplenciaDetalhe.updateMany(exitQuery, {
@@ -553,26 +567,24 @@ class SpreadsheetController {
           if (exitResult.modifiedCount > 0) exitedDebtors++;
         }
 
-        newDebtors = [...currentDebtorKeys].filter((key) => !previousDebtors.has(key)).length;
+        newDebtors = [...currentDebtorKeys].filter(k => !previousDebtors.has(k)).length;
 
-        // Calcula total importado para diagnÃ³stico
         const totalImportado = await InadimplenciaDetalhe.aggregate([
-          { $match: { user: new (require('mongoose').Types.ObjectId)(userId), importBatch } },
+          { $match: { user: new ObjectId(userId), importBatch } },
           { $group: { _id: null, soma: { $sum: '$total' }, count: { $sum: 1 } } }
         ]);
-        const somaImportada = totalImportado[0]?.soma || 0;
-        const countImportado = totalImportado[0]?.count || 0;
+        const somaImportada = totalImportado[0] ? totalImportado[0].soma : 0;
+        const countImportado = totalImportado[0] ? totalImportado[0].count : 0;
 
-        logger.info(`[importGeneric] DONE: created=${created} updated=${updated} errors=${errors} soma=R$${somaImportada.toFixed(2)} count=${countImportado}`);
-
-        // Emite resultado final via socket
+        logger.info('[importGeneric] DONE: created=' + created + ' updated=' + updated + ' errors=' + errors + ' soma=R$' + somaImportada.toFixed(2) + ' count=' + countImportado + ' leads_novos=' + leadsToCreate.length);
+        if (io) io.emit('spreadsheet-progress', { percent: 100, status: 'finalizado' });
         if (io) io.emit('spreadsheet-done', {
           success: true, importBatch, created, updated, errors,
           total: records.length, newDebtors, exitedDebtors, skippedDuplicates,
           somaImportada: parseFloat(somaImportada.toFixed(2)), countImportado
         });
       } catch (e) {
-        logger.error('[importGeneric] Erro crÃ­tico no background:', e);
+        logger.error('[importGeneric] Erro critico no background: ' + e.message);
         if (io) io.emit('spreadsheet-done', { success: false, error: e.message });
       } finally {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
