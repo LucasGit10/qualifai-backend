@@ -1,10 +1,26 @@
-const { getModel } = require('../../utils/modelProvider');
+﻿const { getModel } = require('../../utils/modelProvider');
 const MessageTemplate = getModel('MessageTemplate');
 const metaTemplateService = require('../../services/metaTemplateService');
 const logger = require('../../utils/logger');
 const WhatsAppInstance = getModel('WhatsAppInstance');
 
 class MessageTemplateController {
+  _buildPublicBaseUrl(req) {
+    const forwardedProtoHeader = req.headers['x-forwarded-proto'];
+    const forwardedProto = Array.isArray(forwardedProtoHeader)
+      ? forwardedProtoHeader[0]
+      : (forwardedProtoHeader || '').split(',')[0].trim();
+    const requestProto = forwardedProto || req.protocol || 'http';
+    const requestHost = req.headers['x-forwarded-host'] || req.get('host');
+
+    let baseUrl = (process.env.APP_URL || `${requestProto}://${requestHost}`).replace(/\/$/, '');
+
+    if (process.env.NODE_ENV === 'production' && /^http:\/\//i.test(baseUrl)) {
+      baseUrl = baseUrl.replace(/^http:\/\//i, 'https://');
+    }
+
+    return baseUrl;
+  }
   
   async list(req, res) {
     try {
@@ -21,7 +37,7 @@ class MessageTemplateController {
       );
 
       if (templatesToSync.length > 0) {
-        logger.info(`[Auto Sync] Encontrados ${templatesToSync.length} templates pendentes para verificação.`);
+        logger.info(`[Auto Sync] Encontrados ${templatesToSync.length} templates pendentes para verificaÃ§Ã£o.`);
         const instance = await WhatsAppInstance.findOne({ user: req.user.id, status: 'connected' });
         
         if (instance) {
@@ -51,7 +67,7 @@ class MessageTemplateController {
                   oneSignalService.sendPushNotification(
                     req.user.id.toString(),
                     'Oba! Template Aprovado',
-                    `Seu template "${template.name}" foi aprovado pela Meta e está pronto para uso.`,
+                    `Seu template "${template.name}" foi aprovado pela Meta e estÃ¡ pronto para uso.`,
                     { type: 'meta_template', link: '/app/template-message' }
                   );
                 }
@@ -66,7 +82,7 @@ class MessageTemplateController {
 
           await Promise.all(syncPromises);
         } else {
-          logger.warn(`[Auto Sync] Nenhuma instância conectada encontrada para o usuário ${req.user.id}. Sincronização pulada.`);
+          logger.warn(`[Auto Sync] Nenhuma instÃ¢ncia conectada encontrada para o usuÃ¡rio ${req.user.id}. SincronizaÃ§Ã£o pulada.`);
         }
       }
       
@@ -89,7 +105,7 @@ class MessageTemplateController {
       res.status(201).json(newTemplate);
     } catch (error) {
       if (error.code === 11000) {
-        return res.status(400).json({ message: `O nome de template '${error.keyValue.name}' já está em uso.` });
+        return res.status(400).json({ message: `O nome de template '${error.keyValue.name}' jÃ¡ estÃ¡ em uso.` });
       }
       logger.error('Erro ao criar template:', error);
       res.status(500).json({ message: 'Erro ao criar template.' });
@@ -97,16 +113,16 @@ class MessageTemplateController {
   }
 
   // ==========================================================
-  //  ✅ FUNÇÃO ADICIONADA (O "Passo 1" do Upload)
+  //  âœ… FUNÃ‡ÃƒO ADICIONADA (O "Passo 1" do Upload)
   // ==========================================================
   async uploadSampleImage(req, res) {
     try {
       if (!req.file) {
-        return res.status(400).json({ message: 'Nenhum arquivo recebido. Verifique se o campo é "sampleImage".' });
+        return res.status(400).json({ message: 'Nenhum arquivo recebido. Verifique se o campo Ã© "sampleImage".' });
       }
 
-      // Monta a URL pública (requer APP_URL no .env e express.static no app.js)
-      const sampleUrl = `${process.env.APP_URL}/uploads/${req.file.filename}`;
+      const publicBaseUrl = this._buildPublicBaseUrl(req);
+      const sampleUrl = `${publicBaseUrl}/uploads/${req.file.filename}`;
       
       logger.info(`[Template Sample] Imagem de amostra salva com sucesso: ${sampleUrl}`);
       
@@ -129,14 +145,14 @@ class MessageTemplateController {
       const { whatsappInstanceId, sampleUrl } = req.body; 
 
       const template = await MessageTemplate.findOne({ _id: templateId, user: req.user.id });
-      if (!template) return res.status(404).json({ message: 'Template não encontrado.' });
+      if (!template) return res.status(404).json({ message: 'Template nÃ£o encontrado.' });
       if (template.status !== 'draft' && template.status !== 'rejected') {
         return res.status(400).json({ message: 'Apenas templates em rascunho ou rejeitados podem ser enviados.' });
       }
 
       const instance = await WhatsAppInstance.findOne({ _id: whatsappInstanceId, user: req.user.id });
       if (!instance) {
-        return res.status(404).json({ message: 'Instância do WhatsApp não encontrada.' });
+        return res.status(404).json({ message: 'InstÃ¢ncia do WhatsApp nÃ£o encontrada.' });
       }
 
       const metaResponse = await metaTemplateService.submitTemplateForApproval(template, instance, sampleUrl);
@@ -146,8 +162,8 @@ class MessageTemplateController {
       template.metaTemplateId = metaResponse.id;
       await template.save();
       
-      logger.info('Template enviado para aprovação da Meta', { templateId: template._id });
-      res.json({ message: 'Template enviado para aprovação!', template });
+      logger.info('Template enviado para aprovaÃ§Ã£o da Meta', { templateId: template._id });
+      res.json({ message: 'Template enviado para aprovaÃ§Ã£o!', template });
     } catch (error) {
         logger.error('Erro ao submeter template para Meta:', { error: error.message, stack: error.stack });
         res.status(500).json({ message: error.message });
@@ -161,7 +177,7 @@ class MessageTemplateController {
 
       const template = await MessageTemplate.findOne({ _id: templateId, user: req.user.id });
       if (!template) {
-        return res.status(404).json({ message: 'Template não encontrado.' });
+        return res.status(404).json({ message: 'Template nÃ£o encontrado.' });
       }
 
       if (!['draft', 'rejected'].includes(template.status)) {
@@ -192,7 +208,7 @@ class MessageTemplateController {
       const { templateId } = req.params;
       const template = await MessageTemplate.findOne({ _id: templateId, user: req.user.id });
       if (!template) {
-        return res.status(404).json({ message: 'Template não encontrado.' });
+        return res.status(404).json({ message: 'Template nÃ£o encontrado.' });
       }
       
       if (template.metaTemplateId && template.status !== 'draft') {
@@ -200,7 +216,7 @@ class MessageTemplateController {
           if (instance) {
               await metaTemplateService.deleteTemplateFromMeta(instance, template.name);
           } else {
-              logger.warn(`Nenhuma instância conectada encontrada para o usuário ${req.user.id}, não foi possível deletar o template da Meta.`);
+              logger.warn(`Nenhuma instÃ¢ncia conectada encontrada para o usuÃ¡rio ${req.user.id}, nÃ£o foi possÃ­vel deletar o template da Meta.`);
           }
       }
       await MessageTemplate.findByIdAndDelete(templateId);
@@ -219,7 +235,7 @@ class MessageTemplateController {
 
         const originalTemplate = await MessageTemplate.findOne({ _id: templateId, user: userId });
         if (!originalTemplate) {
-            return res.status(404).json({ message: 'Template original não encontrado.' });
+            return res.status(404).json({ message: 'Template original nÃ£o encontrado.' });
         }
         const baseName = originalTemplate.name.split('_v')[0];
 
@@ -253,7 +269,7 @@ class MessageTemplateController {
 
         const instance = await WhatsAppInstance.findOne({ _id: whatsappInstanceId, user: userId });
         if (!instance) {
-            return res.status(404).json({ message: 'Instância do WhatsApp não encontrada.' });
+            return res.status(404).json({ message: 'InstÃ¢ncia do WhatsApp nÃ£o encontrada.' });
         }
 
         const metaResponse = await metaTemplateService.submitTemplateForApproval(newTemplateVersion, instance, sampleUrl);
@@ -264,13 +280,13 @@ class MessageTemplateController {
         await newTemplateVersion.save();
 
         await MessageTemplate.findByIdAndDelete(templateId);
-        logger.info(`Template antigo (${originalTemplate.name}) deletado após reenvio.`);
+        logger.info(`Template antigo (${originalTemplate.name}) deletado apÃ³s reenvio.`);
         
-        logger.info('Nova versão do template enviada para aprovação', { newTemplateId: newTemplateVersion._id, newName });
-        res.status(201).json({ message: `Nova versão (${newName}) enviada para aprovação!`, template: newTemplateVersion });
+        logger.info('Nova versÃ£o do template enviada para aprovaÃ§Ã£o', { newTemplateId: newTemplateVersion._id, newName });
+        res.status(201).json({ message: `Nova versÃ£o (${newName}) enviada para aprovaÃ§Ã£o!`, template: newTemplateVersion });
 
     } catch (error) {
-        logger.error('Erro ao reenviar nova versão do template:', { error: error.message, stack: error.stack });
+        logger.error('Erro ao reenviar nova versÃ£o do template:', { error: error.message, stack: error.stack });
         res.status(500).json({ message: error.message });
     }
   }
@@ -282,7 +298,7 @@ class MessageTemplateController {
   
       const instance = await WhatsAppInstance.findOne({ _id: instanceId, user: userId });
       if (!instance || !instance.wabaId) {
-        return res.status(404).json({ message: 'Instância não encontrada ou não possui WABA ID associado.' });
+        return res.status(404).json({ message: 'InstÃ¢ncia nÃ£o encontrada ou nÃ£o possui WABA ID associado.' });
       }
   
       const templates = await MessageTemplate.find({ 
@@ -292,7 +308,7 @@ class MessageTemplateController {
   
       res.json(templates);
     } catch (error) {
-      logger.error('Erro ao listar templates por instância:', error);
+      logger.error('Erro ao listar templates por instÃ¢ncia:', error);
       res.status(500).json({ message: 'Erro ao buscar templates.' });
     }
   }
@@ -303,33 +319,33 @@ class MessageTemplateController {
 
     if (!templateId || !instanceId || !contacts || !Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ 
-        message: 'Parâmetros inválidos. É necessário: templateId, instanceId e um array [contacts] não vazio.' 
+        message: 'ParÃ¢metros invÃ¡lidos. Ã‰ necessÃ¡rio: templateId, instanceId e um array [contacts] nÃ£o vazio.' 
       });
     }
 
     try {
       const instance = await WhatsAppInstance.findOne({ _id: instanceId, user: userId });
       if (!instance || !instance.wabaId) {
-        return res.status(404).json({ message: 'Instância do WhatsApp não encontrada ou não configurada corretamente (WABA ID faltando).' });
+        return res.status(404).json({ message: 'InstÃ¢ncia do WhatsApp nÃ£o encontrada ou nÃ£o configurada corretamente (WABA ID faltando).' });
       }
 
       const template = await MessageTemplate.findOne({ _id: templateId, user: userId });
       if (!template) {
-        return res.status(404).json({ message: 'Template não encontrado.' });
+        return res.status(404).json({ message: 'Template nÃ£o encontrado.' });
       }
       if (template.status !== 'approved') {
         return res.status(400).json({ message: 'O template precisa estar com status "Aprovado" para ser enviado.' });
       }
       if (template.category !== 'MARKETING') {
-        return res.status(400).json({ message: 'MM Lite só pode ser usado com templates da categoria "MARKETING".' });
+        return res.status(400).json({ message: 'MM Lite sÃ³ pode ser usado com templates da categoria "MARKETING".' });
       }
 
-      logger.info(`[MM Lite] Criando lista de contatos com ${contacts.length} números.`);
+      logger.info(`[MM Lite] Criando lista de contatos com ${contacts.length} nÃºmeros.`);
       const contactListResponse = await metaTemplateService.createContactList(instance, contacts);
       const contactListId = contactListResponse.id;
 
       if (!contactListId) {
-        throw new Error('Não foi possível obter o ID da lista de contatos da Meta.');
+        throw new Error('NÃ£o foi possÃ­vel obter o ID da lista de contatos da Meta.');
       }
 
       logger.info(`[MM Lite] Disparando campanha com template ${template.name} para a lista ${contactListId}.`);
@@ -357,13 +373,13 @@ class MessageTemplateController {
     const userId = req.user.id;
 
     if (!instanceId) {
-      return res.status(400).json({ message: 'O parâmetro "instanceId" é obrigatório na query string.' });
+      return res.status(400).json({ message: 'O parÃ¢metro "instanceId" Ã© obrigatÃ³rio na query string.' });
     }
 
     try {
       const instance = await WhatsAppInstance.findOne({ _id: instanceId, user: userId });
       if (!instance) {
-        return res.status(404).json({ message: 'Instância não encontrada.' });
+        return res.status(404).json({ message: 'InstÃ¢ncia nÃ£o encontrada.' });
       }
 
       const stats = await metaTemplateService.getCampaignStats(instance, campaignId);
@@ -371,8 +387,8 @@ class MessageTemplateController {
       res.status(200).json(stats);
 
     } catch (error) {
-      logger.error(`[MM Lite] Erro ao buscar estatísticas da campanha ${campaignId}:`, { error: error.message });
-      res.status(500).json({ message: error.message || 'Erro interno ao buscar estatísticas.' });
+      logger.error(`[MM Lite] Erro ao buscar estatÃ­sticas da campanha ${campaignId}:`, { error: error.message });
+      res.status(500).json({ message: error.message || 'Erro interno ao buscar estatÃ­sticas.' });
     }
   }
 

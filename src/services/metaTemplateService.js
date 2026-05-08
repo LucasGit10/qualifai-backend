@@ -1,6 +1,88 @@
-const logger = require('../utils/logger');
+﻿const logger = require('../utils/logger');
 const axios = require('axios');
 const WhatsAppInstance = require('../models/WhatsAppInstance');
+
+const GRAPH_API_VERSION = 'v19.0';
+
+function getFilenameFromUrl(url, fallback = 'sample-media') {
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname || '';
+    const filename = pathname.split('/').filter(Boolean).pop();
+    return filename || fallback;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+async function downloadPublicMedia(sampleUrl) {
+  const response = await axios.get(sampleUrl, {
+    responseType: 'arraybuffer',
+    timeout: 20000,
+    maxRedirects: 5,
+    validateStatus: status => status >= 200 && status < 300
+  });
+
+  const contentType = (response.headers['content-type'] || '').split(';')[0].trim();
+  if (!contentType || !/^(image|video|application)\//.test(contentType)) {
+    throw new Error(`A URL de exemplo precisa retornar um arquivo de mÃ­dia. Content-Type recebido: ${contentType || 'ausente'}.`);
+  }
+
+  return {
+    buffer: Buffer.from(response.data),
+    mimeType: contentType,
+    filename: getFilenameFromUrl(sampleUrl)
+  };
+}
+
+async function createTemplateMediaHandle(instance, sampleUrl) {
+  const appId = process.env.META_APP_ID;
+  const token = instance.apiCredentials?.token;
+
+  if (!appId) {
+    throw new Error('META_APP_ID nÃ£o configurado. NecessÃ¡rio para gerar mÃ­dia de exemplo do template.');
+  }
+
+  const { buffer, mimeType, filename } = await downloadPublicMedia(sampleUrl);
+  const createSessionUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${appId}/uploads`;
+
+  const sessionResponse = await axios.post(createSessionUrl, null, {
+    params: {
+      file_name: filename,
+      file_length: buffer.length,
+      file_type: mimeType,
+      access_token: token
+    },
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 20000
+  });
+
+  const uploadSessionId = sessionResponse.data?.id;
+  if (!uploadSessionId) {
+    throw new Error('Meta nÃ£o retornou o ID da sessÃ£o de upload da mÃ­dia de exemplo.');
+  }
+
+  const uploadResponse = await axios.post(
+    `https://graph.facebook.com/${GRAPH_API_VERSION}/${uploadSessionId}`,
+    buffer,
+    {
+      headers: {
+        Authorization: `OAuth ${token}`,
+        file_offset: '0',
+        'Content-Type': mimeType
+      },
+      maxBodyLength: Infinity,
+      timeout: 30000
+    }
+  );
+
+  const handle = uploadResponse.data?.h;
+  if (!handle) {
+    throw new Error('Meta nÃ£o retornou o header_handle da mÃ­dia de exemplo.');
+  }
+
+  return handle;
+}
 
 function extractTemplateVariables(templateComponents) {
   const variables = [];
@@ -20,7 +102,7 @@ function extractTemplateVariables(templateComponents) {
       }
     }
     
-    // Variáveis em botões (ex: URL dinâmica)
+    // VariÃ¡veis em botÃµes (ex: URL dinÃ¢mica)
     if (component.type === 'BUTTONS' && component.buttons) {
       component.buttons.forEach(btn => {
         if (btn.url) {
@@ -57,14 +139,14 @@ function generateDefaultValues(variables, contactName = 'Cliente') {
 
 async function sendIndividualTemplateMessages(instance, templateName, phoneNumbers, templateComponents, contactNames = {}, mediaUrl = null) {
   if (!instance || !instance.apiCredentials?.token || !instance.phoneNumberId) {
-    throw new Error('Credenciais da instância (Token, Phone Number ID) não encontradas.');
+    throw new Error('Credenciais da instÃ¢ncia (Token, Phone Number ID) nÃ£o encontradas.');
   }
 
   const { token } = instance.apiCredentials;
   const results = [];
   
   const variables = extractTemplateVariables(templateComponents);
-  logger.info(`[Template] Template "${templateName}" possui ${variables.length} variáveis, usando envio com parâmetros. MediaURL: ${mediaUrl ? 'Sim' : 'Não'}`);
+  logger.info(`[Template] Template "${templateName}" possui ${variables.length} variÃ¡veis, usando envio com parÃ¢metros. MediaURL: ${mediaUrl ? 'Sim' : 'NÃ£o'}`);
   
   for (const phone of phoneNumbers) {
     let components = [];
@@ -77,7 +159,7 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
       templateComponents.forEach(templateComp => {
         const componentType = templateComp.type.toLowerCase();
 
-        // 1. Tratamento de Cabeçalho de Mídia (Opcional)
+        // 1. Tratamento de CabeÃ§alho de MÃ­dia (Opcional)
         if (componentType === 'header' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(templateComp.format)) {
             if (mediaUrl) {
                 const mediaType = templateComp.format.toLowerCase();
@@ -93,7 +175,7 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
             }
         }
 
-        // 2. Tratamento de Variáveis de Texto (BODY e HEADER texto)
+        // 2. Tratamento de VariÃ¡veis de Texto (BODY e HEADER texto)
         const componentVariables = extractTemplateVariables([templateComp]); 
         if (componentVariables.length > 0) {
             const parameters = componentVariables.map(varNum => ({
@@ -101,9 +183,9 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
                 text: defaultValues[varNum]
             }));
             
-            // Verifica se já existe um componente deste tipo (ex: header de mídia já adicionado)
-            // No caso de HEADER com texto E mídia, a Meta tem regras específicas, 
-            // mas aqui tratamos o caso mais comum: ou mídia ou texto com variável.
+            // Verifica se jÃ¡ existe um componente deste tipo (ex: header de mÃ­dia jÃ¡ adicionado)
+            // No caso de HEADER com texto E mÃ­dia, a Meta tem regras especÃ­ficas, 
+            // mas aqui tratamos o caso mais comum: ou mÃ­dia ou texto com variÃ¡vel.
             let existingComp = components.find(c => c.type === componentType);
             if (existingComp) {
                 existingComp.parameters = [...existingComp.parameters, ...parameters];
@@ -127,7 +209,7 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
         }
       };
 
-      logger.info(`[Fallback] Enviando template para ${phone} com ${components.length} componentes de parâmetro`);
+      logger.info(`[Fallback] Enviando template para ${phone} com ${components.length} componentes de parÃ¢metro`);
       const response = await axios.post(url, payload, {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
       });
@@ -140,7 +222,7 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
         variablesUsed: variables.length > 0 ? generateDefaultValues(variables, contactNames[phone]) : null
       });
       
-      logger.info(`[Fallback] ✅ Template enviado para ${phone} com ${variables.length} variáveis.`);
+      logger.info(`[Fallback] âœ… Template enviado para ${phone} com ${variables.length} variÃ¡veis.`);
       
       await new Promise(resolve => setTimeout(resolve, 200));
       
@@ -153,7 +235,7 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
         error: errorData?.message || error.message,
         errorDetails: errorData
       });
-      logger.error(`[Fallback] ❌ Erro ao enviar para ${phone} (${errorData?.code || 'N/A'}):`, {
+      logger.error(`[Fallback] âŒ Erro ao enviar para ${phone} (${errorData?.code || 'N/A'}):`, {
         message: errorData?.message,
         details: errorData?.error_data?.details
       });
@@ -167,7 +249,7 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
 
 async function sendSimpleTemplateMessages(instance, templateName, phoneNumbers) {
   if (!instance || !instance.apiCredentials?.token || !instance.phoneNumberId) {
-    throw new Error('Credenciais da instância (Token, Phone Number ID) não encontradas.');
+    throw new Error('Credenciais da instÃ¢ncia (Token, Phone Number ID) nÃ£o encontradas.');
   }
 
   const { token } = instance.apiCredentials;
@@ -191,7 +273,7 @@ async function sendSimpleTemplateMessages(instance, templateName, phoneNumbers) 
       });
 
       results.push({ phone, success: true, method: 'SIMPLE_FALLBACK', messageId: response.data.messages?.[0]?.id });
-      logger.info(`[Simple] ✅ Template enviado para ${phone}`);
+      logger.info(`[Simple] âœ… Template enviado para ${phone}`);
       
       await new Promise(resolve => setTimeout(resolve, 200));
       
@@ -204,7 +286,7 @@ async function sendSimpleTemplateMessages(instance, templateName, phoneNumbers) 
         error: errorData?.message || error.message,
         errorDetails: errorData
       });
-      logger.error(`[Simple] ❌ Erro ao enviar para ${phone} (${errorData?.code || 'N/A'}):`, errorData);
+      logger.error(`[Simple] âŒ Erro ao enviar para ${phone} (${errorData?.code || 'N/A'}):`, errorData);
       
       await new Promise(resolve => setTimeout(resolve, 200));
     }
@@ -215,7 +297,7 @@ async function sendSimpleTemplateMessages(instance, templateName, phoneNumbers) 
 
 async function checkApiCompatibility(instance) {
   if (!instance || !instance.apiCredentials?.token || !instance.wabaId) {
-    throw new Error('Credenciais da instância (Token, WABA ID) não encontradas.');
+    throw new Error('Credenciais da instÃ¢ncia (Token, WABA ID) nÃ£o encontradas.');
   }
 
   const { token } = instance.apiCredentials;
@@ -226,30 +308,30 @@ async function checkApiCompatibility(instance) {
   for (const version of versionsToTest) {
     try {
       const url = `https://graph.facebook.com/${version}/${wabaId}/marketing_contact_lists`;
-      logger.info(`[API Check] Testando versão: ${version}`);
+      logger.info(`[API Check] Testando versÃ£o: ${version}`);
       
       await axios.post(url, { phone_numbers: ['5511999999999'] }, {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         timeout: 5000
       });
       
-      logger.info(`[API Check] ✅ Versão ${version} compatível!`);
+      logger.info(`[API Check] âœ… VersÃ£o ${version} compatÃ­vel!`);
       return version;
     } catch (error) {
       if (error.response?.status === 404 || error.response?.data?.error?.code === 2500) {
-        logger.info(`[API Check] ❌ Versão ${version} não suporta MM Lite`);
+        logger.info(`[API Check] âŒ VersÃ£o ${version} nÃ£o suporta MM Lite`);
         continue;
       }
-      logger.warn(`[API Check] Erro inesperado na versão ${version}:`, error.response?.data?.error?.message || error.message);
+      logger.warn(`[API Check] Erro inesperado na versÃ£o ${version}:`, error.response?.data?.error?.message || error.message);
     }
   }
   
-  throw new Error('Nenhuma versão da API suporta MM Lite. Verifique se o WABA ID está migrado ou se as versões da API estão atualizadas no código.');
+  throw new Error('Nenhuma versÃ£o da API suporta MM Lite. Verifique se o WABA ID estÃ¡ migrado ou se as versÃµes da API estÃ£o atualizadas no cÃ³digo.');
 }
 
 async function createContactList(instance, phoneNumbers) {
   if (!instance || !instance.apiCredentials?.token || !instance.wabaId) {
-    throw new Error('Credenciais da instância (Token, WABA ID) não encontradas.');
+    throw new Error('Credenciais da instÃ¢ncia (Token, WABA ID) nÃ£o encontradas.');
   }
 
   const { token } = instance.apiCredentials;
@@ -274,7 +356,7 @@ async function createContactList(instance, phoneNumbers) {
     logger.error('[MM Lite] ERRO DETALHADO (createContactList):', error.response?.data?.error);
     
     if (error.response?.data?.error?.code === 2429006) {
-      throw new Error('WABA ID não migrado para MM Lite. É necessário migrar primeiro.');
+      throw new Error('WABA ID nÃ£o migrado para MM Lite. Ã‰ necessÃ¡rio migrar primeiro.');
     }
     
     const errorMessage = error.response?.data?.error?.message || 'Erro ao criar lista de contatos MM Lite.';
@@ -284,7 +366,7 @@ async function createContactList(instance, phoneNumbers) {
 
 async function sendMMLiteCampaign(instance, templateName, contactListId) {
   if (!instance || !instance.apiCredentials?.token || !instance.wabaId) {
-    throw new Error('Credenciais da instância (Token, WABA ID) não encontradas.');
+    throw new Error('Credenciais da instÃ¢ncia (Token, WABA ID) nÃ£o encontradas.');
   }
 
   const { token } = instance.apiCredentials;
@@ -310,7 +392,7 @@ async function sendMMLiteCampaign(instance, templateName, contactListId) {
     logger.error('[MM Lite] ERRO DETALHADO (sendMMLiteCampaign):', error.response?.data?.error);
     
     if (error.response?.data?.error?.code === 2429006) {
-      throw new Error('WABA ID não migrado para MM Lite. É necessário migrar primeiro.');
+      throw new Error('WABA ID nÃ£o migrado para MM Lite. Ã‰ necessÃ¡rio migrar primeiro.');
     }
     
     const errorMessage = error.response?.data?.error?.message || 'Erro ao disparar campanha MM Lite.';
@@ -322,16 +404,16 @@ async function sendCampaignOrFallback(instance, templateName, phoneNumbers, temp
   const variables = extractTemplateVariables(templateComponents);
 
   if (variables.length > 0) {
-    logger.info('[Dispatch] Template tem variáveis. MM Lite não aplicável. Usando envio individual.');
+    logger.info('[Dispatch] Template tem variÃ¡veis. MM Lite nÃ£o aplicÃ¡vel. Usando envio individual.');
     return await sendIndividualTemplateMessages(instance, templateName, phoneNumbers, templateComponents, contactNames);
   }
 
   try {
-    logger.info('[Dispatch] Template sem variáveis. Tentando envio via MM Lite.');
+    logger.info('[Dispatch] Template sem variÃ¡veis. Tentando envio via MM Lite.');
     const contactList = await createContactList(instance, phoneNumbers);
     const campaignResult = await sendMMLiteCampaign(instance, templateName, contactList.id);
     
-    logger.info(`[Dispatch] ✅ Sucesso via MM Lite. Campanha ID: ${campaignResult.campaign_id}`);
+    logger.info(`[Dispatch] âœ… Sucesso via MM Lite. Campanha ID: ${campaignResult.campaign_id}`);
     return { 
       success: true, 
       method: 'MM_LITE', 
@@ -340,14 +422,14 @@ async function sendCampaignOrFallback(instance, templateName, phoneNumbers, temp
     };
 
   } catch (mmLiteError) {
-    logger.warn(`[Dispatch] ❌ Falha no MM Lite. Motivo: ${mmLiteError.message}. Ativando fallback para envio simples.`);
+    logger.warn(`[Dispatch] âŒ Falha no MM Lite. Motivo: ${mmLiteError.message}. Ativando fallback para envio simples.`);
     return await sendSimpleTemplateMessages(instance, templateName, phoneNumbers);
   }
 }
 
 async function checkMigrationStatus(instance) {
   if (!instance || !instance.wabaId || !instance.apiCredentials?.token) {
-    throw new Error('Credenciais da instância (Token, WABA ID) não encontradas.');
+    throw new Error('Credenciais da instÃ¢ncia (Token, WABA ID) nÃ£o encontradas.');
   }
   
   const { token } = instance.apiCredentials;
@@ -365,31 +447,32 @@ async function checkMigrationStatus(instance) {
     responseData = response.data;
 
   } catch (error) {
-    logger.error('[MM Lite] ERRO GRAVE ao buscar WABA ID básico:', error.response?.data?.error);
-    throw new Error(`Falha ao verificar status de migração: Token ou WABA ID inválido: ${error.response?.data?.error?.message || error.message}`);
+    logger.error('[MM Lite] ERRO GRAVE ao buscar WABA ID bÃ¡sico:', error.response?.data?.error);
+    throw new Error(`Falha ao verificar status de migraÃ§Ã£o: Token ou WABA ID invÃ¡lido: ${error.response?.data?.error?.message || error.message}`);
   }
 
   try {
       const compatibleVersion = await checkApiCompatibility(instance);
-      responseData.mm_lite_compatibility = `Compatível com ${compatibleVersion}`;
+      responseData.mm_lite_compatibility = `CompatÃ­vel com ${compatibleVersion}`;
       responseData.is_mm_lite_enabled = true;
   } catch (e) {
       responseData.mm_lite_compatibility = e.message;
       responseData.is_mm_lite_enabled = false;
   }
   
-  logger.info('[MM Lite] Status de migração (Finalizado):', responseData);
+  logger.info('[MM Lite] Status de migraÃ§Ã£o (Finalizado):', responseData);
   return responseData;
 }
 
 async function submitTemplateForApproval(template, instance, sampleUrl = null) {
   if (!instance || !instance.apiCredentials?.token || !instance.wabaId) {
-    throw new Error('Instância do WhatsApp Oficial ou suas credenciais (Token, WABA ID) não foram encontradas.');
+    throw new Error('InstÃ¢ncia do WhatsApp Oficial ou suas credenciais (Token, WABA ID) nÃ£o foram encontradas.');
   }
 
   const { token } = instance.apiCredentials;
   const { wabaId } = instance;
   const url = `https://graph.facebook.com/v19.0/${wabaId}/message_templates`;
+  let sampleMediaHandle = null;
 
   // Ordem rigorosa exigida pela Meta em alguns casos: HEADER, BODY, FOOTER, BUTTONS
   const componentOrder = { 'HEADER': 1, 'BODY': 2, 'FOOTER': 3, 'BUTTONS': 4 };
@@ -397,17 +480,29 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
     return (componentOrder[a.type] || 99) - (componentOrder[b.type] || 99);
   });
 
+  const hasMediaHeader = sortedComponents.some(comp => {
+    const { type, format } = comp.toObject ? comp.toObject() : comp;
+    return type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format);
+  });
+
+  if (hasMediaHeader) {
+    if (!sampleUrl) {
+      throw new Error('Uma URL de exemplo Ã© obrigatÃ³ria para templates de mÃ­dia.');
+    }
+    sampleMediaHandle = await createTemplateMediaHandle(instance, sampleUrl);
+  }
+
   const cleanedComponents = sortedComponents.map(comp => {
     const { type, format, text, buttons } = comp.toObject ? comp.toObject() : comp; 
     
-    // Força o tipo para maiúsculo para evitar "invalid parameter" por casing
+    // ForÃ§a o tipo para maiÃºsculo para evitar "invalid parameter" por casing
     const cleanComp = { type: type.toUpperCase() };
     const isMediaHeader = type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(format);
 
     // Apenas HEADER pode ter o campo 'format'
     if (type === 'HEADER' && format) cleanComp.format = format;
     
-    // BODY e FOOTER sempre usam 'text'. HEADER só usa 'text' se for format TEXT.
+    // BODY e FOOTER sempre usam 'text'. HEADER sÃ³ usa 'text' se for format TEXT.
     if (['BODY', 'FOOTER'].includes(type) && text) {
       cleanComp.text = text.trim();
     }
@@ -417,19 +512,15 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
 
     if (type === 'HEADER') {
       if (isMediaHeader) {
-        if (!sampleUrl) {
-          throw new Error('Uma URL de exemplo é obrigatória para templates de mídia.');
-        }
         cleanComp.example = {
-          header_url: [sampleUrl] 
+          header_handle: [sampleMediaHandle]
         };
       } else if (format === 'TEXT' && text) {
-        // Exemplo para HEADER de texto com variáveis
         const variableRegex = /\{\{([0-9]+)\}\}/g;
         const matches = text.match(variableRegex);
         if (matches) {
           cleanComp.example = {
-            header_text: ['Exemplo'] // Cabeçalho usa array simples de strings
+            header_text: ['Exemplo']
           };
         }
       }
@@ -491,7 +582,7 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
 
 async function deleteTemplateFromMeta(instance, templateName) {
   if (!instance.apiCredentials?.token || !instance.wabaId) {
-    throw new Error('Credenciais da instância não encontradas para deletar o template da Meta.');
+    throw new Error('Credenciais da instÃ¢ncia nÃ£o encontradas para deletar o template da Meta.');
   }
 
   const { token } = instance.apiCredentials;
@@ -506,7 +597,7 @@ async function deleteTemplateFromMeta(instance, templateName) {
     return response.data;
   } catch (error) {
     if (error.response?.data?.error?.error_subcode === 32) {
-        logger.warn(`Template '${templateName}' não foi encontrado na Meta para ser deletado.`);
+        logger.warn(`Template '${templateName}' nÃ£o foi encontrado na Meta para ser deletado.`);
         return { success: true };
     }
     logger.error('ERRO DETALHADO AO DELETAR DA API DA META:', error.response?.data?.error);
@@ -517,7 +608,7 @@ async function deleteTemplateFromMeta(instance, templateName) {
 
 async function getTemplateStatus(metaTemplateId, instance) {
   if (!instance || !instance.apiCredentials?.token) {
-    throw new Error('Instância do WhatsApp ou token não encontrado para verificar o status.');
+    throw new Error('InstÃ¢ncia do WhatsApp ou token nÃ£o encontrado para verificar o status.');
   }
   const { token } = instance.apiCredentials;
   const url = `https://graph.facebook.com/v19.0/${metaTemplateId}`;
@@ -564,7 +655,7 @@ async function getTemplateStatus(metaTemplateId, instance) {
 
 async function getCampaignStats(instance, campaignId) {
   if (!instance || !instance.apiCredentials?.token) {
-    throw new Error('Instância ou token não encontrados para buscar estatísticas.');
+    throw new Error('InstÃ¢ncia ou token nÃ£o encontrados para buscar estatÃ­sticas.');
   }
 
   const { token } = instance.apiCredentials;
@@ -575,12 +666,12 @@ async function getCampaignStats(instance, campaignId) {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     
-    logger.info(`[MM Lite] Estatísticas da campanha ${campaignId} buscadas.`);
+    logger.info(`[MM Lite] EstatÃ­sticas da campanha ${campaignId} buscadas.`);
     return response.data.data && response.data.data.length > 0 ? response.data.data[0] : {};
 
   } catch (error) {
     logger.error(`[MM Lite] ERRO DETALHADO (getCampaignStats ${campaignId}):`, error.response?.data?.error);
-    const errorMessage = error.response?.data?.error?.message || 'Erro ao buscar estatísticas da campanha.';
+    const errorMessage = error.response?.data?.error?.message || 'Erro ao buscar estatÃ­sticas da campanha.';
     throw new Error(errorMessage);
   }
 }
