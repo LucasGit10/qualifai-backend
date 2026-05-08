@@ -4,23 +4,24 @@ const metaTemplateService = require('../../services/metaTemplateService');
 const logger = require('../../utils/logger');
 const WhatsAppInstance = getModel('WhatsAppInstance');
 
-class MessageTemplateController {
-  _buildPublicBaseUrl(req) {
-    const forwardedProtoHeader = req.headers['x-forwarded-proto'];
-    const forwardedProto = Array.isArray(forwardedProtoHeader)
-      ? forwardedProtoHeader[0]
-      : (forwardedProtoHeader || '').split(',')[0].trim();
-    const requestProto = forwardedProto || req.protocol || 'http';
-    const requestHost = req.headers['x-forwarded-host'] || req.get('host');
+function buildPublicBaseUrl(req) {
+  const forwardedProtoHeader = req.headers['x-forwarded-proto'];
+  const forwardedProto = Array.isArray(forwardedProtoHeader)
+    ? forwardedProtoHeader[0]
+    : (forwardedProtoHeader || '').split(',')[0].trim();
+  const requestProto = forwardedProto || req.protocol || 'http';
+  const requestHost = req.headers['x-forwarded-host'] || req.get('host');
 
-    let baseUrl = (process.env.APP_URL || `${requestProto}://${requestHost}`).replace(/\/$/, '');
+  let baseUrl = (process.env.APP_URL || `${requestProto}://${requestHost}`).replace(/\/$/, '');
 
-    if (process.env.NODE_ENV === 'production' && /^http:\/\//i.test(baseUrl)) {
-      baseUrl = baseUrl.replace(/^http:\/\//i, 'https://');
-    }
-
-    return baseUrl;
+  if (process.env.NODE_ENV === 'production' && /^http:\/\//i.test(baseUrl)) {
+    baseUrl = baseUrl.replace(/^http:\/\//i, 'https://');
   }
+
+  return baseUrl;
+}
+
+class MessageTemplateController {
   
   async list(req, res) {
     try {
@@ -121,7 +122,7 @@ class MessageTemplateController {
         return res.status(400).json({ message: 'Nenhum arquivo recebido. Verifique se o campo Ã© "sampleImage".' });
       }
 
-      const publicBaseUrl = this._buildPublicBaseUrl(req);
+      const publicBaseUrl = buildPublicBaseUrl(req);
       const sampleUrl = `${publicBaseUrl}/uploads/${req.file.filename}`;
       
       logger.info(`[Template Sample] Imagem de amostra salva com sucesso: ${sampleUrl}`);
