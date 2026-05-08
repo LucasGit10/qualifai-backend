@@ -599,6 +599,22 @@ class SpreadsheetController {
           if (exitResult.modifiedCount > 0) exitedDebtors++;
         }
 
+        // Marca dividas antigas do mesmo devedor que nao apareceram no batch atual.
+        // Isso evita carregar saldo residual da planilha anterior quando a nova carteira
+        // manteve o devedor, mas removeu parte dos lancamentos dele.
+        const staleChargesResult = await InadimplenciaDetalhe.updateMany(
+          {
+            user: new ObjectId(userId),
+            status: { $ne: 'pago' },
+            importStatus: { $ne: 'saiu' },
+            lastSeenBatch: { $ne: importBatch }
+          },
+          {
+            $set: { importStatus: 'saiu', exitedInBatch: importBatch },
+            $addToSet: { tags: 'saiu' }
+          }
+        );
+
         newDebtors = [...currentDebtorKeys].filter(k => !previousDebtors.has(k)).length;
 
         // ── PASSO 6: Auto-correção de registros com lead=null ──────────────────
@@ -673,11 +689,12 @@ class SpreadsheetController {
         const somaPrincipal    = totaisCarteira[0]  ? totaisCarteira[0].somaPrincipal : 0;
         const countCarteira    = totaisCarteira[0]  ? totaisCarteira[0].count : 0;
 
-        logger.info('[importGeneric] DONE: created=' + created + ' updated=' + updated + ' errors=' + errors + ' somaCarteira=R$' + somaCarteira.toFixed(2) + ' somaBatch=R$' + somaImportada.toFixed(2) + ' count=' + countImportado + ' leads_novos=' + leadsToCreate.length);
+        logger.info('[importGeneric] DONE: created=' + created + ' updated=' + updated + ' errors=' + errors + ' staleCharges=' + (staleChargesResult.modifiedCount || 0) + ' somaCarteira=R$' + somaCarteira.toFixed(2) + ' somaBatch=R$' + somaImportada.toFixed(2) + ' count=' + countImportado + ' leads_novos=' + leadsToCreate.length);
         if (io) io.emit('spreadsheet-progress', { percent: 100, status: 'finalizado' });
         if (io) io.emit('spreadsheet-done', {
           success: true, importBatch, created, updated, errors,
           total: records.length, newDebtors, exitedDebtors, skippedDuplicates,
+          staleCharges: staleChargesResult.modifiedCount || 0,
           somaImportada: parseFloat(somaImportada.toFixed(2)), countImportado,
           somaCarteira: parseFloat(somaCarteira.toFixed(2)),
           somaPrincipal: parseFloat(somaPrincipal.toFixed(2)),
