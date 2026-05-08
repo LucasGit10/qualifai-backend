@@ -122,7 +122,9 @@ app.use((req, res, next) => {
 });
 
 // Corrigido para apontar para 'public/uploads'
-app.use('/uploads', express.static(path.join(__dirname, '..', 'public/uploads')));
+const publicUploadsPath = path.join(__dirname, '..', 'public/uploads');
+app.use('/uploads', express.static(publicUploadsPath));
+app.use('/api/uploads', express.static(publicUploadsPath));
 
 // Inicializa o Socket.io via Hub (evita dependência circular)
 const io = socketHub.init(server);

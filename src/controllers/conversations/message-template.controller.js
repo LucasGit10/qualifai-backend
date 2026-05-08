@@ -12,7 +12,7 @@ function buildPublicBaseUrl(req) {
   const requestProto = forwardedProto || req.protocol || 'http';
   const requestHost = req.headers['x-forwarded-host'] || req.get('host');
 
-  let baseUrl = (process.env.APP_URL || `${requestProto}://${requestHost}`).replace(/\/$/, '');
+  let baseUrl = (process.env.BACKEND_URL || process.env.APP_URL || `${requestProto}://${requestHost}`).replace(/\/$/, '');
 
   if (process.env.NODE_ENV === 'production' && /^http:\/\//i.test(baseUrl)) {
     baseUrl = baseUrl.replace(/^http:\/\//i, 'https://');
