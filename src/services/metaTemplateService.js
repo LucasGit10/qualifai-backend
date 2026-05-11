@@ -1,6 +1,8 @@
 ﻿const logger = require('../utils/logger');
 const axios = require('axios');
 const WhatsAppInstance = require('../models/WhatsAppInstance');
+const fs = require('fs/promises');
+const path = require('path');
 
 const GRAPH_API_VERSION = 'v25.0';
 
@@ -15,13 +17,91 @@ function getFilenameFromUrl(url, fallback = 'sample-media') {
   }
 }
 
+function getPublicMediaUrlCandidates(sampleUrl) {
+  const candidates = [sampleUrl];
+
+  if (sampleUrl.includes('/uploads/')) {
+    candidates.push(sampleUrl.replace('/uploads/', '/api/uploads/'));
+  }
+
+  if (sampleUrl.includes('/api/uploads/')) {
+    candidates.push(sampleUrl.replace('/api/uploads/', '/uploads/'));
+  }
+
+  return [...new Set(candidates)];
+}
+
+function getMimeTypeFromFilename(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+    '.mp4': 'video/mp4',
+    '.pdf': 'application/pdf'
+  };
+
+  return mimeTypes[ext] || 'application/octet-stream';
+}
+
+async function readLocalUploadedMedia(sampleUrl) {
+  try {
+    const parsed = new URL(sampleUrl);
+    if (!parsed.pathname.includes('/uploads/')) return null;
+
+    const filename = path.basename(parsed.pathname);
+    const localPath = path.join(__dirname, '../../public/uploads', filename);
+    const buffer = await fs.readFile(localPath);
+
+    return {
+      buffer,
+      mimeType: getMimeTypeFromFilename(filename),
+      filename
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 async function downloadPublicMedia(sampleUrl) {
-  const response = await axios.get(sampleUrl, {
-    responseType: 'arraybuffer',
-    timeout: 20000,
-    maxRedirects: 5,
-    validateStatus: status => status >= 200 && status < 300
-  });
+  const candidates = getPublicMediaUrlCandidates(sampleUrl);
+  let response;
+  let lastError;
+
+  for (const candidateUrl of candidates) {
+    try {
+      response = await axios.get(candidateUrl, {
+        responseType: 'arraybuffer',
+        timeout: 20000,
+        maxRedirects: 5,
+        validateStatus: status => status >= 200 && status < 300
+      });
+      sampleUrl = candidateUrl;
+      break;
+    } catch (error) {
+      lastError = error;
+      logger.warn('[Template Sample] Falha ao baixar mÃ­dia pÃºblica para aprovaÃ§Ã£o.', {
+        sampleUrl: candidateUrl,
+        status: error.response?.status,
+        message: error.message
+      });
+    }
+  }
+
+  if (!response) {
+    const localMedia = await readLocalUploadedMedia(sampleUrl);
+    if (localMedia) {
+      logger.info('[Template Sample] MÃ­dia de exemplo carregada do volume local de uploads.', {
+        sampleUrl,
+        filename: localMedia.filename
+      });
+      return localMedia;
+    }
+
+    throw new Error(`NÃ£o foi possÃ­vel acessar a mÃ­dia de exemplo pela URL pÃºblica. Status: ${lastError?.response?.status || 'sem resposta'}. URL: ${sampleUrl}`);
+  }
 
   const contentType = (response.headers['content-type'] || '').split(';')[0].trim();
   if (!contentType || !/^(image|video|application)\//.test(contentType)) {

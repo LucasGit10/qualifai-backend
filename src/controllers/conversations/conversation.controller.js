@@ -1,4 +1,5 @@
 const { getModel } = require('../../utils/modelProvider');
+const mongoose = require('mongoose');
 const Conversation = getModel('Conversation');
 const Lead = getModel('Lead');
 const WhatsAppInstance = getModel('WhatsAppInstance');
@@ -20,17 +21,23 @@ class ConversationController {
         .populate('lead', 'name phone email company')
         // Adicionar o populate para a instância
         .populate('instance', 'instanceName phoneNumber') 
-        .sort({ handedOffToHuman: -1, updatedAt: -1 })
+        .sort({ handedOffToHuman: -1, lastMessageAt: -1, updatedAt: -1 })
         .limit(limit * 1)
         .skip((page - 1) * limit);
 
       const total = await Conversation.countDocuments(filter);
+      const aggregateFilter = { ...filter, user: new mongoose.Types.ObjectId(userId) };
+      const unreadAggregate = await Conversation.aggregate([
+        { $match: aggregateFilter },
+        { $group: { _id: null, totalUnread: { $sum: { $ifNull: ['$unreadCount', 0] } } } }
+      ]);
 
       res.json({
         conversations,
         totalPages: Math.ceil(total / limit),
         currentPage: page,
-        total
+        total,
+        totalUnread: unreadAggregate[0]?.totalUnread || 0
       });
     } catch (error) {
       logger.error('Erro ao listar conversas:', error);
@@ -97,6 +104,29 @@ class ConversationController {
   }
 
   // Adicionar nota à conversa
+  async markAsRead(req, res) {
+    try {
+      const conversation = await Conversation.findOneAndUpdate(
+        { _id: req.params.id, user: req.user.id },
+        { unreadCount: 0, lastReadAt: new Date() },
+        { new: true }
+      )
+      .populate('lead', 'name email company phone position')
+      .populate('instance', 'instanceName phoneNumber');
+
+      if (!conversation) {
+        return res.status(404).json({ message: 'Conversa nÃ£o encontrada' });
+      }
+
+      req.app.get('io')?.to(`user-${req.user.id}`).emit('conversation_updated', { conversation });
+
+      res.json({ success: true, conversation });
+    } catch (error) {
+      logger.error('Erro ao marcar conversa como lida:', error);
+      res.status(500).json({ message: 'Erro interno do servidor' });
+    }
+  }
+
   async addNote(req, res) {
     try {
       const { content } = req.body;

@@ -4,9 +4,10 @@ const conversationController = require('../../controllers/conversations/conversa
 const auth = require('../../middleware/auth');
 
 router.get('/', auth, conversationController.getConversations);
-router.get('/:id', auth, conversationController.getConversationById);
 router.get('/lead/:leadId', auth, conversationController.getConversationsByLead);
+router.get('/:id', auth, conversationController.getConversationById);
 router.put('/:id/status', auth, conversationController.updateConversationStatus);
+router.put('/:id/read', auth, conversationController.markAsRead);
 router.post('/:id/notes', auth, conversationController.addNote);
 
 // Rota genérica para atualização. Deve vir depois de rotas mais específicas.

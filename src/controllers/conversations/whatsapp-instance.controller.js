@@ -387,6 +387,9 @@ async function sendMessage(req, res) {
                 results: results
             }
         });
+        conversation.sentCount = (conversation.sentCount || 0) + successes.length;
+        conversation.lastMessageAt = new Date();
+        conversation.lastOutboundMessageAt = new Date();
         await conversation.save();
 
         if (conversation.lead) {
@@ -823,18 +826,39 @@ async function receiveWebhook(req, res) {
                         logger.info(`[WEBHOOK] STATUS UPDATE: Mensagem ${statusUpdate.id} para ${statusUpdate.recipient_id} agora está '${statusUpdate.status}'.`);
                         const lead = await Lead.findOne({ phone: statusUpdate.recipient_id, user: instance.user._id });
                         if (lead) {
-                            await Conversation.updateOne(
-                                { lead: lead._id, user: instance.user._id, status: { $ne: 'closed' } },
+                            const statusKey = `${statusUpdate.id}:${statusUpdate.status}`;
+                            const inc = {};
+                            if (statusUpdate.status === 'sent') inc.sentCount = 1;
+                            if (statusUpdate.status === 'delivered') inc.deliveredCount = 1;
+                            if (statusUpdate.status === 'read') inc.readCount = 1;
+                            const statusConversation = await Conversation.findOneAndUpdate(
                                 {
+                                    lead: lead._id,
+                                    user: instance.user._id,
+                                    status: { $ne: 'closed' },
+                                    processedStatusIds: { $ne: statusKey }
+                                },
+                                {
+                                    ...(Object.keys(inc).length > 0 ? { $inc: inc } : {}),
+                                    $addToSet: { processedStatusIds: statusKey },
+                                    ...(statusUpdate.status === 'read' ? { $set: { lastReadAt: new Date() } } : {}),
                                     $push: {
                                         messages: {
                                             role: 'system',
                                             content: `[Status da Mensagem] Status alterado para: ${statusUpdate.status.toUpperCase()}`,
-                                            channel: 'whatsapp'
+                                            channel: 'whatsapp',
+                                            metadata: {
+                                                providerMessageId: statusUpdate.id,
+                                                providerStatus: statusUpdate.status
+                                            }
                                         }
                                     }
-                                }
+                                },
+                                { new: true }
                             );
+                            if (statusConversation) {
+                                req.app.get('io')?.to(`user-${instance.user._id}`).emit('conversation_updated', { conversation: statusConversation });
+                            }
                         }
                     }
                 }
@@ -978,6 +1002,7 @@ async function receiveWebhook(req, res) {
                                 conversationId: conversation._id,
                                 messageId
                             });
+                            await WhatsAppInstance.findByIdAndUpdate(instance._id, { $inc: { messagesReceived: 1 } });
                         } catch (aiError) {
                             logger.error('[WEBHOOK] Falha ao processar com a IA:', aiError);
                         }

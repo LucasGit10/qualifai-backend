@@ -122,8 +122,8 @@ class MessageTemplateController {
         return res.status(400).json({ message: 'Nenhum arquivo recebido. Verifique se o campo Ã© "sampleImage".' });
       }
 
-      const publicBaseUrl = buildPublicBaseUrl(req);
-      const sampleUrl = `${publicBaseUrl}/uploads/${req.file.filename}`;
+      const publicBaseUrl = buildPublicBaseUrl(req).replace(/\/api$/i, '');
+      const sampleUrl = `${publicBaseUrl}/api/uploads/${req.file.filename}`;
       
       logger.info(`[Template Sample] Imagem de amostra salva com sucesso: ${sampleUrl}`);
       

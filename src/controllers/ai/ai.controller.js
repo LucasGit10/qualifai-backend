@@ -171,6 +171,9 @@ class AIController {
             messageToPush.metadata = { audioUrl: req.body.audioUrl };
         }
         conversation.messages.push(messageToPush);
+        conversation.unreadCount = (conversation.unreadCount || 0) + 1;
+        conversation.lastMessageAt = new Date();
+        conversation.lastInboundMessageAt = new Date();
         await conversation.save();
         req.app.get('io').to(`user-${userId}`).emit('conversation_updated', { conversation });
 
@@ -203,6 +206,9 @@ class AIController {
 
             const finalAiResponse = "Entendido. Um de nossos especialistas entrará em contato em breve para ajudar.";
             conversation.messages.push({ role: 'ai', content: finalAiResponse, channel });
+            conversation.sentCount = (conversation.sentCount || 0) + 1;
+            conversation.lastMessageAt = new Date();
+            conversation.lastOutboundMessageAt = new Date();
 
             await conversation.save();
             
@@ -312,6 +318,9 @@ class AIController {
         }
 
         conversation.messages.push({ role: 'ai', content: aiResponse, channel });
+        conversation.sentCount = (conversation.sentCount || 0) + 1;
+        conversation.lastMessageAt = new Date();
+        conversation.lastOutboundMessageAt = new Date();
         await conversation.save();
 
         if (user.settings?.aiConfig?.enableVoiceInteraction) {
