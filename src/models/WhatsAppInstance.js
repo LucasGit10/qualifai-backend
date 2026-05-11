@@ -75,6 +75,21 @@ const whatsappInstanceSchema = new mongoose.Schema({
   messagesReceived: {
     type: Number,
     default: 0
+  },
+  historySync: {
+    status: {
+      type: String,
+      enum: ['idle', 'syncing', 'completed', 'declined', 'error'],
+      default: 'idle'
+    },
+    progress: {
+      type: Number,
+      default: 0
+    },
+    phase: Number,
+    lastChunkOrder: Number,
+    lastSyncedAt: Date,
+    lastError: String
   }
 }, {
   timestamps: true

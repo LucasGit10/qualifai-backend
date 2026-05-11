@@ -233,7 +233,8 @@ class WhatsAppAIController {
                 const { googleMeetLink } = await aiService.createMeetingInCRMs(user, lead, meetingTime);
                 
                 conversation.schedulingAttempt.status = 'confirmed'; // (Mantido para UI/compatibilidade)
-                conversation.status = 'concluída';
+                conversation.status = 'closed';
+                conversation.endedAt = new Date();
                 conversation.conversationState = 'CONVERTED'; // NOVO ESTADO DE FIM
                 
                 const formattedDate = meetingTime.toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
@@ -300,7 +301,8 @@ class WhatsAppAIController {
             // A IA decidiu encerrar a conversa (sem agendar e sem escalar)?
             else if (aiResult.endCall === true) {
                 logger.info(`[AI Action] IA encerrou a conversa com lead ${lead._id}. Status: ${aiResult.leadStatus}`);
-                conversation.status = 'concluída';
+                conversation.status = 'closed';
+                conversation.endedAt = new Date();
                 // O conversationState (ex: 'DISMISSED') já foi definido pela IA
                 conversationEnded = true; // --- GATILHO DE ESCRITA (DISPENSA) ---
             }

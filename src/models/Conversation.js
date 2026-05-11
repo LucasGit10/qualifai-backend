@@ -21,7 +21,8 @@ const messageSchema = new mongoose.Schema({
   },
   metadata: {
     type: Map,
-    of: String
+    of: mongoose.Schema.Types.Mixed,
+    default: {}
   }
 });
 
@@ -41,6 +42,9 @@ const conversationSchema = new mongoose.Schema({
     ref: 'WhatsAppInstance',
   },
   messages: [messageSchema],
+  processedMessageIds: [{
+    type: String
+  }],
   notes: [{
     type: String,
     default: []

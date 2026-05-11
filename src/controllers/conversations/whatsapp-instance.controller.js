@@ -329,8 +329,11 @@ async function sendMessage(req, res) {
 
         // Salva uma única mensagem no histórico da conversa para representar o disparo
         logger.info(`[sendMessage] Adicionando mensagem ao histórico da conversa ${conversationId}.`);
+        const allowedRoles = ['ai', 'human', 'lead', 'system'];
+        const messageRole = allowedRoles.includes(senderRole) ? senderRole : 'human';
+
         conversation.messages.push({
-            role: senderRole || 'humano',
+            role: messageRole,
             content: message,
             channel: 'whatsapp',
             timestamp: new Date(),
@@ -408,6 +411,289 @@ function corrigirNumeroBrasil(numero) {
     return numero;
 }
 
+function onlyDigits(value = '') {
+    return String(value).replace(/\D/g, '');
+}
+
+function buildFlexiblePhoneRegex(phoneNumber = '') {
+    const digits = onlyDigits(phoneNumber);
+    if (!digits) return null;
+    return new RegExp(digits.split('').join('\\D*'));
+}
+
+async function findMetaInstanceFromWebhook(entry, value, phoneNumberId) {
+    let instance = null;
+    if (phoneNumberId) {
+        instance = await WhatsAppInstance.findOne({ phoneNumberId }).populate('user');
+        if (instance) return instance;
+    }
+
+    const wabaId = entry?.id;
+    const displayPhoneNumber = value?.metadata?.display_phone_number;
+    const displayPhoneRegex = buildFlexiblePhoneRegex(displayPhoneNumber);
+    const fallbackQueries = [];
+
+    if (wabaId && displayPhoneRegex) fallbackQueries.push({ wabaId, phoneNumber: displayPhoneRegex });
+    if (displayPhoneRegex) fallbackQueries.push({ phoneNumber: displayPhoneRegex });
+    if (wabaId) fallbackQueries.push({ wabaId });
+
+    for (const query of fallbackQueries) {
+        instance = await WhatsAppInstance.findOne(query).populate('user');
+        if (instance) break;
+    }
+
+    if (!instance) return null;
+
+    logger.warn('[WEBHOOK] Instância encontrada por fallback. Atualizando phoneNumberId local.', {
+        instanceId: instance._id,
+        previousPhoneNumberId: instance.phoneNumberId,
+        receivedPhoneNumberId: phoneNumberId,
+        wabaId,
+        displayPhoneNumber
+    });
+
+    if (phoneNumberId && instance.phoneNumberId !== phoneNumberId) {
+        instance.phoneNumberId = phoneNumberId;
+        await instance.save().catch(error => {
+            logger.error('[WEBHOOK] Falha ao atualizar phoneNumberId da instância encontrada por fallback.', {
+                instanceId: instance._id,
+                error: error.message
+            });
+        });
+    }
+
+    return instance;
+}
+
+function toDateFromMetaTimestamp(timestamp) {
+    if (!timestamp) return new Date();
+    const timestampNumber = Number(timestamp);
+    if (!Number.isNaN(timestampNumber)) {
+        return new Date(timestampNumber < 1000000000000 ? timestampNumber * 1000 : timestampNumber);
+    }
+    const parsed = new Date(timestamp);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function extractMessageContent(message) {
+    if (!message || typeof message !== 'object') return null;
+    if (message.text?.body) return message.text.body;
+    if (message.button?.text) return message.button.text;
+    if (message.interactive?.button_reply?.title) return message.interactive.button_reply.title;
+    if (message.interactive?.list_reply?.title) return message.interactive.list_reply.title;
+
+    const type = message.type || 'unknown';
+    const typedPayload = message[type];
+    if (typedPayload?.caption) return `[${type}] ${typedPayload.caption}`;
+    if (typedPayload?.filename) return `[${type}] ${typedPayload.filename}`;
+    if (type === 'media_placeholder') return '[Mensagem de mídia importada do histórico]';
+
+    return `[Mensagem ${type} importada do histórico]`;
+}
+
+function looksLikeHistoryMessage(value) {
+    return value
+        && typeof value === 'object'
+        && !Array.isArray(value)
+        && (value.id || value.message_id || value.wamid)
+        && (value.type || value.text || value.image || value.audio || value.video || value.document || value.sticker || value.interactive || value.button || value.media_placeholder)
+        && (value.timestamp || value.device_timestamp || value.created_at);
+}
+
+function looksLikePhoneKey(key) {
+    return onlyDigits(key).length >= 8;
+}
+
+function extractHistoryMessages(value, businessPhoneNumber) {
+    const businessDigits = onlyDigits(businessPhoneNumber);
+    const extracted = [];
+
+    function visit(node, contextPhone = null) {
+        if (!node) return;
+
+        if (Array.isArray(node)) {
+            node.forEach(item => visit(item, contextPhone));
+            return;
+        }
+
+        if (typeof node !== 'object') return;
+
+        if (looksLikeHistoryMessage(node)) {
+            const toPhone = onlyDigits(node.to);
+            const fromPhone = onlyDigits(node.from);
+            const contextDigits = onlyDigits(contextPhone);
+            const outbound = !!toPhone || (fromPhone && businessDigits && fromPhone === businessDigits);
+            const contactPhone = outbound ? (toPhone || contextDigits) : (fromPhone || contextDigits);
+
+            if (contactPhone) {
+                extracted.push({
+                    id: node.id || node.message_id || node.wamid,
+                    role: outbound ? 'human' : 'lead',
+                    phone: contactPhone,
+                    content: extractMessageContent(node),
+                    timestamp: toDateFromMetaTimestamp(node.timestamp || node.device_timestamp || node.created_at),
+                    type: node.type || 'unknown',
+                    status: node.status,
+                    raw: node
+                });
+            }
+            return;
+        }
+
+        for (const [key, child] of Object.entries(node)) {
+            visit(child, looksLikePhoneKey(key) ? key : contextPhone);
+        }
+    }
+
+    visit(value);
+    return extracted
+        .filter(item => item.id && item.phone && item.content)
+        .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+async function findOrCreateWhatsappLead(userId, phone, name = null) {
+    const normalizedPhone = corrigirNumeroBrasil(onlyDigits(phone));
+
+    let lead = await Lead.findOne({
+        user: userId,
+        $or: [
+            { phone: normalizedPhone },
+            { "contacts.value": normalizedPhone }
+        ]
+    });
+
+    if (lead) return lead;
+
+    lead = new Lead({
+        user: userId,
+        phone: normalizedPhone,
+        name: name || normalizedPhone,
+        email: `${normalizedPhone}@whatsapp.qualifai`,
+        company: 'Não Informado',
+        source: 'whatsapp',
+        contacts: [{ type: 'phone', value: normalizedPhone, label: 'WhatsApp' }]
+    });
+    await lead.save();
+    return lead;
+}
+
+async function getOrCreateWhatsappConversation(instance, lead) {
+    let conversation = await Conversation.findOne({
+        user: instance.user._id,
+        lead: lead._id,
+        channel: 'whatsapp',
+        status: { $ne: 'closed' }
+    }).sort({ updatedAt: -1 });
+
+    if (conversation) return conversation;
+
+    conversation = new Conversation({
+        user: instance.user._id,
+        instance: instance._id,
+        lead: lead._id,
+        channel: 'whatsapp',
+        messages: [{
+            role: 'system',
+            content: 'Histórico importado da Meta.',
+            channel: 'whatsapp',
+            metadata: { source: 'meta_history' }
+        }]
+    });
+    await conversation.save();
+    return conversation;
+}
+
+async function importMetaHistory(entry, value, req) {
+    const phoneNumberId = value.metadata?.phone_number_id || value.phone_number_id || value.customer_phone_number_id;
+    const instance = await findMetaInstanceFromWebhook(entry, value, phoneNumberId);
+
+    if (!instance || !instance.user) {
+        logger.warn('[WEBHOOK][history] Instância ou usuário não encontrado. Histórico não importado.', {
+            phoneNumberId,
+            wabaId: entry?.id,
+            displayPhoneNumber: value.metadata?.display_phone_number || value.display_phone_number
+        });
+        return;
+    }
+
+    const progress = Number(value.progress ?? value.history?.progress ?? 0);
+    const declined = value.status === 'declined'
+        || value.history?.status === 'declined'
+        || value.history?.chat_history_sharing === 'declined';
+
+    if (declined) {
+        instance.historySync = {
+            ...(instance.historySync?.toObject?.() || instance.historySync || {}),
+            status: 'declined',
+            progress,
+            lastSyncedAt: new Date()
+        };
+        await instance.save();
+        logger.warn('[WEBHOOK][history] Compartilhamento de histórico recusado pelo cliente.', { instanceId: instance._id });
+        return;
+    }
+
+    const businessPhoneNumber = value.metadata?.display_phone_number || value.display_phone_number || instance.phoneNumber;
+    const historyMessages = extractHistoryMessages(value, businessPhoneNumber);
+    let importedCount = 0;
+    let skippedCount = 0;
+
+    for (const historyMessage of historyMessages) {
+        const lead = await findOrCreateWhatsappLead(instance.user._id, historyMessage.phone);
+        const conversation = await getOrCreateWhatsappConversation(instance, lead);
+        const processedIds = new Set(conversation.processedMessageIds || []);
+
+        if (processedIds.has(historyMessage.id)) {
+            skippedCount += 1;
+            continue;
+        }
+
+        conversation.messages.push({
+            role: historyMessage.role,
+            content: historyMessage.content,
+            channel: 'whatsapp',
+            timestamp: historyMessage.timestamp,
+            metadata: {
+                source: 'meta_history',
+                messageId: historyMessage.id,
+                type: historyMessage.type,
+                status: historyMessage.status,
+                importedAt: new Date()
+            }
+        });
+        conversation.processedMessageIds.push(historyMessage.id);
+        conversation.messages.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+        await conversation.save();
+        importedCount += 1;
+    }
+
+    instance.historySync = {
+        ...(instance.historySync?.toObject?.() || instance.historySync || {}),
+        status: progress >= 100 ? 'completed' : 'syncing',
+        progress,
+        phase: value.phase ?? value.history?.phase,
+        lastChunkOrder: value.chunk_order ?? value.history?.chunk_order,
+        lastSyncedAt: new Date(),
+        lastError: null
+    };
+    await instance.save();
+
+    logger.info('[WEBHOOK][history] Histórico da Meta processado.', {
+        instanceId: instance._id,
+        importedCount,
+        skippedCount,
+        progress
+    });
+
+    if (importedCount > 0 && req.app.get('io')) {
+        req.app.get('io').to(`user-${instance.user._id}`).emit('conversation_history_imported', {
+            instanceId: instance._id,
+            importedCount,
+            progress
+        });
+    }
+}
+
 
 async function receiveWebhook(req, res) {
     try {
@@ -416,12 +702,23 @@ async function receiveWebhook(req, res) {
 
         if (body.object === 'whatsapp_business_account') {
             for (const entry of body.entry) {
-                const changes = entry.changes?.[0];
-                if (!changes || changes.field !== 'messages') {
+                const changesList = entry.changes || [];
+                if (changesList.length === 0) {
                     continue;
                 }
 
+                for (const changes of changesList) {
                 const value = changes.value;
+
+                if (changes.field === 'history') {
+                    await importMetaHistory(entry, value, req);
+                    continue;
+                }
+
+                if (changes.field !== 'messages') {
+                    continue;
+                }
+
                 const phoneNumberId = value.metadata?.phone_number_id;
 
                 if (!phoneNumberId) {
@@ -429,11 +726,19 @@ async function receiveWebhook(req, res) {
                     continue;
                 }
 
-                const instance = await WhatsAppInstance.findOne({ phoneNumberId }).populate('user');
+                const instance = await findMetaInstanceFromWebhook(entry, value, phoneNumberId);
                 if (!instance || !instance.user) {
-                    logger.warn(`[WEBHOOK] Instância ou usuário não encontrado para phoneNumberId: ${phoneNumberId}. Pulando.`);
+                    logger.warn(`[WEBHOOK] Instância ou usuário não encontrado para phoneNumberId: ${phoneNumberId}. Pulando.`, {
+                        wabaId: entry?.id,
+                        displayPhoneNumber: value.metadata?.display_phone_number
+                    });
                     continue;
                 }
+
+                await instance.addWebhookEvent(
+                    value.messages ? 'message_received' : (value.statuses ? 'message_status' : 'meta_webhook'),
+                    { field: changes.field, value }
+                ).catch(err => logger.error('[WEBHOOK] Erro ao salvar evento da Meta:', err.message));
 
                 if (value.statuses) {
                     for (const statusUpdate of value.statuses) {
@@ -559,6 +864,7 @@ async function receiveWebhook(req, res) {
                             logger.error('[WEBHOOK] Falha ao processar com a IA:', aiError);
                         }
                     }
+                }
                 }
             }
         }
