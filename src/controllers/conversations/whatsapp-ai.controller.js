@@ -120,7 +120,7 @@ class WhatsAppAIController {
       const { leadId, instanceId, templateId, mediaUrl, imageUrl } = req.body;
       const userId = req.user.id;
       
-      const finalMediaUrl = mediaUrl || imageUrl; // Suporta ambos os nomes de campo
+      let finalMediaUrl = mediaUrl || imageUrl; // Suporta ambos os nomes de campo
 
       if (!leadId || !instanceId || !templateId) {
         return res.status(400).json({ message: 'leadId, instanceId e templateId são obrigatórios.' });
@@ -135,6 +135,7 @@ class WhatsAppAIController {
       const template = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
       if (!template) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
 
+      if (!finalMediaUrl) finalMediaUrl = template.sampleMediaUrl;
       const components = buildTemplateComponents(template, lead, finalMediaUrl);
 
       const conversation = new Conversation({

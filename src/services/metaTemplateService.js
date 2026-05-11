@@ -2,7 +2,7 @@
 const axios = require('axios');
 const WhatsAppInstance = require('../models/WhatsAppInstance');
 
-const GRAPH_API_VERSION = 'v19.0';
+const GRAPH_API_VERSION = 'v25.0';
 
 function getFilenameFromUrl(url, fallback = 'sample-media') {
   try {
@@ -154,7 +154,7 @@ async function sendIndividualTemplateMessages(instance, templateName, phoneNumbe
     const defaultValues = generateDefaultValues(variables, contactName);
 
     try {
-      const url = `https://graph.facebook.com/v19.0/${instance.phoneNumberId}/messages`; 
+      const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${instance.phoneNumberId}/messages`; 
       
       templateComponents.forEach(templateComp => {
         const componentType = templateComp.type.toLowerCase();
@@ -257,7 +257,7 @@ async function sendSimpleTemplateMessages(instance, templateName, phoneNumbers) 
   
   for (const phone of phoneNumbers) {
     try {
-      const url = `https://graph.facebook.com/v19.0/${instance.phoneNumberId}/messages`;
+      const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${instance.phoneNumberId}/messages`;
       const payload = {
         messaging_product: 'whatsapp',
         to: phone,
@@ -303,7 +303,7 @@ async function checkApiCompatibility(instance) {
   const { token } = instance.apiCredentials;
   const { wabaId } = instance;
   
-  const versionsToTest = ['v25.0', 'v24.0', 'v23.0', 'v22.0', 'v21.0', 'v20.0', 'v19.0'];
+  const versionsToTest = [GRAPH_API_VERSION];
   
   for (const version of versionsToTest) {
     try {
@@ -400,12 +400,19 @@ async function sendMMLiteCampaign(instance, templateName, contactListId) {
   }
 }
 
-async function sendCampaignOrFallback(instance, templateName, phoneNumbers, templateComponents, contactNames = {}) {
+async function sendCampaignOrFallback(instance, templateName, phoneNumbers, templateComponents, contactNames = {}, mediaUrl = null) {
   const variables = extractTemplateVariables(templateComponents);
+  const hasMediaHeader = templateComponents.some(component =>
+    component.type === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(component.format)
+  );
 
-  if (variables.length > 0) {
-    logger.info('[Dispatch] Template tem variÃ¡veis. MM Lite nÃ£o aplicÃ¡vel. Usando envio individual.');
-    return await sendIndividualTemplateMessages(instance, templateName, phoneNumbers, templateComponents, contactNames);
+  if (variables.length > 0 || hasMediaHeader) {
+    logger.info('[Dispatch] Template tem variáveis ou mídia. MM Lite não aplicável. Usando envio individual.', {
+      variables: variables.length,
+      hasMediaHeader,
+      hasMediaUrl: !!mediaUrl
+    });
+    return await sendIndividualTemplateMessages(instance, templateName, phoneNumbers, templateComponents, contactNames, mediaUrl);
   }
 
   try {
@@ -434,7 +441,7 @@ async function checkMigrationStatus(instance) {
   
   const { token } = instance.apiCredentials;
   const { wabaId } = instance;
-  const url = `https://graph.facebook.com/v19.0/${wabaId}`; 
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}`; 
   let responseData = {};
 
   try {
@@ -471,7 +478,7 @@ async function submitTemplateForApproval(template, instance, sampleUrl = null) {
 
   const { token } = instance.apiCredentials;
   const { wabaId } = instance;
-  const url = `https://graph.facebook.com/v19.0/${wabaId}/message_templates`;
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/message_templates`;
   let sampleMediaHandle = null;
 
   // Ordem rigorosa exigida pela Meta em alguns casos: HEADER, BODY, FOOTER, BUTTONS
@@ -587,7 +594,7 @@ async function deleteTemplateFromMeta(instance, templateName) {
 
   const { token } = instance.apiCredentials;
   const { wabaId } = instance;
-  const url = `https://graph.facebook.com/v19.0/${wabaId}/message_templates?name=${templateName}`;
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/message_templates?name=${templateName}`;
 
   try {
     const response = await axios.delete(url, {
@@ -611,7 +618,7 @@ async function getTemplateStatus(metaTemplateId, instance) {
     throw new Error('InstÃ¢ncia do WhatsApp ou token nÃ£o encontrado para verificar o status.');
   }
   const { token } = instance.apiCredentials;
-  const url = `https://graph.facebook.com/v19.0/${metaTemplateId}`;
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${metaTemplateId}`;
 
   try {
     const statusResponse = await axios.get(url, {
@@ -659,7 +666,7 @@ async function getCampaignStats(instance, campaignId) {
   }
 
   const { token } = instance.apiCredentials;
-  const url = `https://graph.facebook.com/v19.0/${campaignId}/stats`;
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${campaignId}/stats`;
 
   try {
     const response = await axios.get(url, {

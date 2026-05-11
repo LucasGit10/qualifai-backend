@@ -288,7 +288,8 @@ class CampaignController {
           messageTemplate.name,
           phoneNumbers,
           messageTemplate.components,
-          contactNames
+          contactNames,
+          messageTemplate.sampleMediaUrl
         );
         
         // Processa a resposta

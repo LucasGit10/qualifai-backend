@@ -30,6 +30,7 @@ const messageTemplateSchema = new mongoose.Schema({
   }],
   status: { type: String, enum: ['draft', 'pending_approval', 'approved', 'rejected'], default: 'draft' },
   metaTemplateId: { type: String }, // ID retornado pela Meta
+  sampleMediaUrl: { type: String },
   rejectionReason: { type: String }
 }, { timestamps: true });
 

@@ -161,6 +161,7 @@ class MessageTemplateController {
       template.wabaId = instance.wabaId;
       template.status = 'pending_approval';
       template.metaTemplateId = metaResponse.id;
+      if (sampleUrl) template.sampleMediaUrl = sampleUrl;
       await template.save();
       
       logger.info('Template enviado para aprovaÃ§Ã£o da Meta', { templateId: template._id });
@@ -278,6 +279,7 @@ class MessageTemplateController {
         newTemplateVersion.status = 'pending_approval';
         newTemplateVersion.metaTemplateId = metaResponse.id;
         newTemplateVersion.wabaId = instance.wabaId;
+        if (sampleUrl) newTemplateVersion.sampleMediaUrl = sampleUrl;
         await newTemplateVersion.save();
 
         await MessageTemplate.findByIdAndDelete(templateId);
