@@ -10,6 +10,7 @@ router.get('/', whatsappInstanceController.listInstances);
 router.post('/', whatsappInstanceController.createInstance);
 router.delete('/instances/:id', whatsappInstanceController.deleteInstance);
 router.patch('/:instanceId/token', whatsappInstanceController.updateInstanceToken);
+router.post('/:instanceId/subscribe-webhook', whatsappInstanceController.subscribeInstanceWebhook);
 router.post('/complete-onboarding', whatsappInstanceController.completeOnboarding);
 router.post('/send', whatsappInstanceController.sendMessage);
 router.get('/:instanceId/messages', whatsappInstanceController.listReceivedMessages);

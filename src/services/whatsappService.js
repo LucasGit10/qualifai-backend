@@ -406,6 +406,40 @@ async function getConnectionDetailsFromToken(accessToken) {
  * Registra um número de telefone com a API da Meta Cloud.
  * (PIN é usado para migração, pode ser um PIN fixo ou variável)
  */
+async function subscribeWabaToWebhooks(wabaId, token) {
+  if (!wabaId || !token) {
+    logger.warn('[Meta Webhook] WABA ID ou token ausente. Não foi possível inscrever o app no WABA.', {
+      hasWabaId: !!wabaId,
+      hasToken: !!token
+    });
+    return null;
+  }
+
+  const url = `https://graph.facebook.com/${API_VERSION}/${wabaId}/subscribed_apps`;
+
+  try {
+    const response = await axios.post(url, null, {
+      headers: { Authorization: `Bearer ${token}` },
+      httpsAgent,
+      timeout: REQUEST_TIMEOUT
+    });
+
+    logger.info('[Meta Webhook] App inscrito no WABA para receber webhooks.', {
+      wabaId,
+      responseData: response.data
+    });
+
+    return response.data;
+  } catch (error) {
+    logger.error('[Meta Webhook] Falha ao inscrever app no WABA.', {
+      wabaId,
+      message: error.message,
+      response: error.response?.data
+    });
+    throw new Error(`Falha ao inscrever app no WABA: ${error.response?.data?.error?.message || error.message}`);
+  }
+}
+
 async function registerPhoneNumber(phoneNumberId, token, pin = '000000') {
   const url = `https://graph.facebook.com/${API_VERSION}/${phoneNumberId}/register`;
   const payload = {
@@ -438,6 +472,7 @@ module.exports = {
     exchangeCodeForTokensAndInfo,
     sendTemplateMessage,
     getConnectionDetailsFromToken,
+    subscribeWabaToWebhooks,
     registerPhoneNumber,
     sendListMessage, // <-- EXPORTADO
     sendReplyButtonsMessage // <-- EXPORTADO

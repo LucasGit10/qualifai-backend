@@ -103,6 +103,16 @@ async function completeOnboarding(req, res) {
             }
 
             logger.info(`[Onboarding] Instância ${instance.instanceName} salva com sucesso para o usuário ${req.user._id}.`);
+            try {
+                await whatsappService.subscribeWabaToWebhooks(instance.wabaId, instance.apiCredentials?.token);
+            } catch (subscribeError) {
+                logger.warn('[Onboarding] Instância salva, mas não foi possível inscrever o app no WABA para webhooks reais.', {
+                    instanceId: instance._id,
+                    wabaId: instance.wabaId,
+                    error: subscribeError.message
+                });
+            }
+
             res.status(201).json({
                 _id: instance._id,
                 instanceName: instance.instanceName,
@@ -187,6 +197,16 @@ async function createInstance(req, res) {
         await instance.save();
 
         logger.info('[CRUD] createInstance: Instância salva com sucesso. Enviando resposta 201.');
+        try {
+            await whatsappService.subscribeWabaToWebhooks(instance.wabaId, instance.apiCredentials?.token);
+        } catch (subscribeError) {
+            logger.warn('[CRUD] Instância salva, mas não foi possível inscrever o app no WABA para webhooks reais.', {
+                instanceId: instance._id,
+                wabaId: instance.wabaId,
+                error: subscribeError.message
+            });
+        }
+
         res.status(201).json(instance);
     } catch (err) {
         logger.error("[CRUD] Erro ao criar instância:", err);
@@ -251,6 +271,31 @@ async function listInstances(req, res) {
     } catch (err) {
         logger.error("[CRUD] Erro ao listar instâncias do usuário:", err);
         res.status(500).json({ error: 'Erro interno do servidor ao buscar instâncias.' });
+    }
+}
+
+async function subscribeInstanceWebhook(req, res) {
+    try {
+        const { instanceId } = req.params;
+        const userId = req.user._id;
+
+        const instance = await WhatsAppInstance.findOne({ _id: instanceId, user: userId });
+        if (!instance) {
+            return res.status(404).json({ error: 'Instância não encontrada ou não autorizada.' });
+        }
+
+        const result = await whatsappService.subscribeWabaToWebhooks(instance.wabaId, instance.apiCredentials?.token);
+        return res.status(200).json({
+            success: true,
+            message: 'App inscrito no WABA para receber webhooks reais.',
+            result
+        });
+    } catch (error) {
+        logger.error('[Webhook Subscribe] Falha ao inscrever instância no WABA:', {
+            message: error.message,
+            stack: error.stack
+        });
+        return res.status(500).json({ error: 'Falha ao inscrever webhook no WABA.', details: error.message });
     }
 }
 
@@ -843,6 +888,14 @@ async function receiveWebhook(req, res) {
                                 channel: 'whatsapp'
                             });
                             await conversation.save();
+                        } else if (!conversation.instance) {
+                            logger.warn('[WEBHOOK] Conversa existente sem instância. Vinculando instância recebida pelo webhook.', {
+                                conversationId: conversation._id,
+                                instanceId: instance._id,
+                                leadId: lead._id
+                            });
+                            conversation.instance = instance._id;
+                            await conversation.save();
                         }
 
                         const alreadyProcessed = await Conversation.findOne({ _id: conversation._id, processedMessageIds: messageId });
@@ -873,6 +926,14 @@ async function receiveWebhook(req, res) {
                         if (!messageText) continue;
 
                         const provider = instance.user?.settings?.integrations?.whatsappProvider;
+                        logger.info('[WEBHOOK] Mensagem recebida pronta para salvar/processar.', {
+                            conversationId: conversation._id,
+                            leadId: lead._id,
+                            from,
+                            messageId,
+                            provider,
+                            aiEnabled: conversation.aiEnabled
+                        });
 
                         const mockReq = {
                             body: {
@@ -884,7 +945,18 @@ async function receiveWebhook(req, res) {
                             user: instance.user,
                             app: req.app
                         };
-                        const mockRes = { json: () => { }, status: () => ({ json: () => { } }) };
+                        const mockRes = {
+                            statusCode: 200,
+                            payload: null,
+                            json(data) {
+                                this.payload = data;
+                                return this;
+                            },
+                            status(statusCode) {
+                                this.statusCode = statusCode;
+                                return this;
+                            }
+                        };
 
                         try {
                             logger.info(`[WEBHOOK] Roteando mensagem de ${from} para a IA...`);
@@ -893,6 +965,19 @@ async function receiveWebhook(req, res) {
                             } else {
                                 await aiController.processLeadResponse(mockReq, mockRes);
                             }
+                            if (mockRes.statusCode >= 400) {
+                                logger.error('[WEBHOOK] Processamento da mensagem recebida retornou erro.', {
+                                    conversationId: conversation._id,
+                                    messageId,
+                                    statusCode: mockRes.statusCode,
+                                    response: mockRes.payload
+                                });
+                                continue;
+                            }
+                            logger.info('[WEBHOOK] Mensagem recebida salva/processada com sucesso.', {
+                                conversationId: conversation._id,
+                                messageId
+                            });
                         } catch (aiError) {
                             logger.error('[WEBHOOK] Falha ao processar com a IA:', aiError);
                         }
@@ -1044,6 +1129,7 @@ module.exports = {
     completeOnboarding,
     createInstance,
     listInstances,
+    subscribeInstanceWebhook,
     sendMessage,
     listReceivedMessages,
     verifyWebhook,
