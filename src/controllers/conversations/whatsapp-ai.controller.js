@@ -9,6 +9,18 @@ const whatsappService = require('../../services/whatsappService');
 const oneSignalService = require('../../services/oneSignalService');
 const logger = require('../../utils/logger');
 
+const isAiUnavailableResult = (result) =>
+  result?.aiUnavailable === true || result?.action === 'disable_ai';
+
+const disableAiWithoutReply = (conversation, channel) => {
+  conversation.aiEnabled = false;
+  conversation.messages.push({
+    role: 'system',
+    content: 'IA desativada automaticamente por indisponibilidade ao processar a mensagem.',
+    channel,
+  });
+};
+
 // buildTemplateComponents (Mantido 100% - Sem alterações)
 const buildTemplateComponents = (template, lead, mediaUrl = null) => {
   const components = [];
@@ -266,6 +278,19 @@ class WhatsAppAIController {
         
         // ETAPA 3: Processa o resultado do aiService (se ele foi chamado)
         if (aiResult) {
+            if (isAiUnavailableResult(aiResult)) {
+                logger.warn('[AI Action] IA indisponivel. Desativando conversa sem enviar resposta ao lead.', {
+                    conversationId: conversation._id,
+                    leadId: lead._id,
+                    action: aiResult.action,
+                    error: aiResult.error,
+                });
+                disableAiWithoutReply(conversation, channel);
+                await conversation.save();
+                req.app.get('io').to(`user-${userId}`).emit('conversation_updated', { conversation });
+                return res.json({ success: true, conversation, aiResponse: null, message: 'IA desativada automaticamente.' });
+            }
+
             aiResponse = aiResult.reply;
 
             // --- ATUALIZAÇÃO DA FASE 3 ---

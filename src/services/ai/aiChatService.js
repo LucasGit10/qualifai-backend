@@ -70,8 +70,10 @@ class AiChatService {
     } catch (error) {
       logger.error('Erro no generateResponse:', error);
       return {
-        reply: 'Desculpe, tive um problema para processar sua mensagem. Poderia repetir, por favor?',
-        action: 'continue_conversation',
+        reply: null,
+        action: 'disable_ai',
+        aiUnavailable: true,
+        error: 'AI_RESPONSE_FAILED',
       };
     }
   }
