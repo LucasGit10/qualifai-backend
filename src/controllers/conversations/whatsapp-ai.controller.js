@@ -202,10 +202,10 @@ class WhatsAppAIController {
             messageToPush.metadata = { audioUrl: req.body.audioUrl };
         }
         conversation.messages.push(messageToPush);
+        await conversation.save();
+        req.app.get('io').to(`user-${userId}`).emit('conversation_updated', { conversation });
         
         if (conversation.aiEnabled === false) {
-            await conversation.save();
-            req.app.get('io').to(`user-${userId}`).emit('conversation_updated', { conversation });
             return res.json({ success: true, conversation, message: "IA desativada, mensagem salva." });
         }
 
