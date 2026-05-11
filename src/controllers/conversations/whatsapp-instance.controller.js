@@ -421,6 +421,13 @@ function buildFlexiblePhoneRegex(phoneNumber = '') {
     return new RegExp(digits.split('').join('\\D*'));
 }
 
+function isMetaSamplePayload(entry, value, phoneNumberId) {
+    const displayPhoneNumber = value?.metadata?.display_phone_number || value?.display_phone_number;
+    return String(phoneNumberId) === '123456123'
+        || String(entry?.id) === '0'
+        || onlyDigits(displayPhoneNumber) === '16505551111';
+}
+
 async function findMetaInstanceFromWebhook(entry, value, phoneNumberId) {
     let instance = null;
     if (phoneNumberId) {
@@ -709,6 +716,16 @@ async function receiveWebhook(req, res) {
 
                 for (const changes of changesList) {
                 const value = changes.value;
+                logger.info('[WEBHOOK] Change recebido da Meta.', {
+                    field: changes.field,
+                    wabaId: entry?.id,
+                    phoneNumberId: value?.metadata?.phone_number_id,
+                    displayPhoneNumber: value?.metadata?.display_phone_number,
+                    hasMessages: Array.isArray(value?.messages),
+                    messageCount: value?.messages?.length || 0,
+                    hasStatuses: Array.isArray(value?.statuses),
+                    statusCount: value?.statuses?.length || 0
+                });
 
                 if (changes.field === 'history') {
                     await importMetaHistory(entry, value, req);
@@ -722,7 +739,21 @@ async function receiveWebhook(req, res) {
                 const phoneNumberId = value.metadata?.phone_number_id;
 
                 if (!phoneNumberId) {
-                    logger.warn('[WEBHOOK] phoneNumberId não encontrado no payload. Pulando.');
+                    logger.warn('[WEBHOOK] phoneNumberId não encontrado no payload. Pulando.', {
+                        field: changes.field,
+                        valueKeys: Object.keys(value || {})
+                    });
+                    continue;
+                }
+
+                if (isMetaSamplePayload(entry, value, phoneNumberId)) {
+                    logger.warn('[WEBHOOK] Payload de teste da Meta recebido. A URL está viva, mas isso não é mensagem real do seu WhatsApp.', {
+                        phoneNumberId,
+                        wabaId: entry?.id,
+                        displayPhoneNumber: value.metadata?.display_phone_number,
+                        hasMessages: Array.isArray(value.messages),
+                        messageCount: value.messages?.length || 0
+                    });
                     continue;
                 }
 
@@ -730,7 +761,9 @@ async function receiveWebhook(req, res) {
                 if (!instance || !instance.user) {
                     logger.warn(`[WEBHOOK] Instância ou usuário não encontrado para phoneNumberId: ${phoneNumberId}. Pulando.`, {
                         wabaId: entry?.id,
-                        displayPhoneNumber: value.metadata?.display_phone_number
+                        displayPhoneNumber: value.metadata?.display_phone_number,
+                        hasMessages: Array.isArray(value.messages),
+                        messageCount: value.messages?.length || 0
                     });
                     continue;
                 }
