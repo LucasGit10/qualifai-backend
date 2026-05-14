@@ -10,6 +10,32 @@ const pdf = require('pdf-parse');
 const fs = require('fs');
 const path = require('path');
 
+const DEFAULT_DEBTOR_STATUSES = ['novo', 'contatado', 'em_negociacao', 'acordado', 'quitado'];
+const HIDDEN_DEBTOR_STATUSES = ['sem_resposta', 'arquivado'];
+
+const normalizeOption = (value, maxLength = 80) => {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/\s+/g, ' ').slice(0, maxLength);
+};
+
+const uniqueOptions = (values) => [...new Set((values || []).map(value => normalizeOption(value)).filter(Boolean))];
+
+const rememberLeadOptions = async (userId, { status, tags } = {}) => {
+  const updates = {};
+  const normalizedStatus = normalizeOption(status);
+  const normalizedTags = uniqueOptions(tags).map(tag => tag.slice(0, 40));
+
+  if (normalizedStatus) updates['settings.debtorStatuses'] = normalizedStatus;
+  if (normalizedTags.length > 0) updates['settings.debtorTags'] = { $each: normalizedTags };
+
+  const update = {};
+  if (Object.keys(updates).length > 0) update.$addToSet = updates;
+
+  if (Object.keys(update).length > 0) {
+    await User.updateOne({ _id: userId }, update);
+  }
+};
+
 const syncLeadWithIntegrations = async (lead, userSettings) => {
     const integrations = [
         { name: 'hubspot', sync: lead.syncWithHubspot },
@@ -69,12 +95,13 @@ class LeadController {
   // Listar leads
   async getLeads(req, res) {
     try {
-      const { page = 1, limit = 25, status, source, sort = '-createdAt', search } = req.query;
+      const { page = 1, limit = 25, status, source, tag, sort = '-createdAt', search } = req.query;
       const userId = req.user.id;
 
       const filter = { user: userId };
       if (status) filter.status = status;
       if (source) filter.source = source;
+      if (tag) filter.tags = tag;
       if (search) {
         const searchRegex = { $regex: search, $options: 'i' };
         filter.$or = [
@@ -137,12 +164,15 @@ class LeadController {
   async createLead(req, res) {
     try {
       const leadData = { ...req.body, user: req.user.id };
+      leadData.status = normalizeOption(leadData.status) || 'novo';
+      leadData.tags = uniqueOptions(leadData.tags).map(tag => tag.slice(0, 40));
       
       const existingLead = await Lead.findOne({ email: leadData.email, user: req.user.id });
       if (existingLead) return res.status(400).json({ message: 'Lead já existe com este email' });
 
       const lead = new Lead(leadData);
       await lead.save();
+      await rememberLeadOptions(req.user.id, leadData);
 
       const user = await User.findById(req.user.id);
       await syncLeadWithIntegrations(lead, user.settings);
@@ -162,7 +192,16 @@ class LeadController {
         return res.status(404).json({ message: 'Lead não encontrado' });
       }
 
-      Object.assign(lead, req.body);
+      const leadData = { ...req.body };
+      if (Object.prototype.hasOwnProperty.call(leadData, 'status')) {
+        leadData.status = normalizeOption(leadData.status) || lead.status || 'novo';
+      }
+      if (Object.prototype.hasOwnProperty.call(leadData, 'tags')) {
+        leadData.tags = uniqueOptions(leadData.tags).map(tag => tag.slice(0, 40));
+      }
+
+      Object.assign(lead, leadData);
+      await rememberLeadOptions(req.user.id, { status: lead.status, tags: lead.tags });
       
       const user = await User.findById(req.user.id);
       if (user.settings?.integrations) {
@@ -541,11 +580,79 @@ class LeadController {
 
   async getLeadStatuses(req, res) {
     try {
-      // Retorna apenas os status desejados pelo usuário
-      const statuses = ['novo', 'contatado', 'em_negociacao', 'acordado', 'quitado', 'sem_resposta', 'arquivado'];
+      const user = await User.findById(req.user.id).select('settings.debtorStatuses').lean();
+      const statusesInUse = await Lead.distinct('status', { user: req.user.id });
+      const statuses = uniqueOptions([
+        ...DEFAULT_DEBTOR_STATUSES,
+        ...(user?.settings?.debtorStatuses || []),
+        ...statusesInUse,
+        ...HIDDEN_DEBTOR_STATUSES
+      ]);
       res.json(statuses);
     } catch (error) {
       logger.error('Erro ao buscar lista de status:', error);
+      res.status(500).json({ message: 'Erro interno do servidor' });
+    }
+  }
+
+  async createLeadStatus(req, res) {
+    try {
+      const status = normalizeOption(req.body?.status);
+      if (!status) {
+        return res.status(400).json({ message: 'Status e obrigatorio.' });
+      }
+
+      await rememberLeadOptions(req.user.id, { status });
+      const user = await User.findById(req.user.id).select('settings.debtorStatuses').lean();
+      const statusesInUse = await Lead.distinct('status', { user: req.user.id });
+      const statuses = uniqueOptions([
+        ...DEFAULT_DEBTOR_STATUSES,
+        ...(user?.settings?.debtorStatuses || []),
+        ...statusesInUse,
+        ...HIDDEN_DEBTOR_STATUSES
+      ]);
+
+      res.status(201).json({ status, statuses });
+    } catch (error) {
+      logger.error('Erro ao criar status de lead:', error);
+      res.status(500).json({ message: 'Erro interno do servidor' });
+    }
+  }
+
+  async getLeadTags(req, res) {
+    try {
+      const user = await User.findById(req.user.id).select('settings.debtorTags').lean();
+      const tagsInUse = await Lead.distinct('tags', { user: req.user.id });
+      const tags = uniqueOptions([
+        ...(user?.settings?.debtorTags || []),
+        ...tagsInUse
+      ]).map(tag => tag.slice(0, 40));
+
+      res.json(tags);
+    } catch (error) {
+      logger.error('Erro ao buscar tags de lead:', error);
+      res.status(500).json({ message: 'Erro interno do servidor' });
+    }
+  }
+
+  async createLeadTag(req, res) {
+    try {
+      const tag = normalizeOption(req.body?.tag, 40);
+      if (!tag) {
+        return res.status(400).json({ message: 'Tag e obrigatoria.' });
+      }
+
+      await rememberLeadOptions(req.user.id, { tags: [tag] });
+      const user = await User.findById(req.user.id).select('settings.debtorTags').lean();
+      const tagsInUse = await Lead.distinct('tags', { user: req.user.id });
+      const tags = uniqueOptions([
+        ...(user?.settings?.debtorTags || []),
+        ...tagsInUse
+      ]).map(option => option.slice(0, 40));
+
+      res.status(201).json({ tag, tags });
+    } catch (error) {
+      logger.error('Erro ao criar tag de lead:', error);
       res.status(500).json({ message: 'Erro interno do servidor' });
     }
   }

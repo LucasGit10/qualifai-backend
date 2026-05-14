@@ -81,6 +81,14 @@ const userSchema = new mongoose.Schema({
       enum: ['cards', 'chat'],
       default: 'cards'
     },
+    debtorStatuses: {
+      type: [String],
+      default: []
+    },
+    debtorTags: {
+      type: [String],
+      default: []
+    },
     performanceReport: {
       enabled: { type: Boolean, default: false },
       frequency: { type: String, enum: ['daily', 'weekly', 'monthly'], default: 'daily' },

@@ -55,10 +55,8 @@ const leadSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: [
-      'novo', 'contatado', 'em_negociacao', 'acordado', 'quitado',
-      'sem_resposta', 'dispensou_ligacao', 'arquivado'
-    ],
+    trim: true,
+    maxlength: 80,
     default: 'novo'
   },
   manualReportStatus: {
