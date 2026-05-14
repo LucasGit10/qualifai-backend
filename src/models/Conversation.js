@@ -41,6 +41,18 @@ const conversationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'WhatsAppInstance',
   },
+  conversationOwnerType: {
+    type: String,
+    enum: ['master', 'teamMember'],
+    default: 'master',
+    index: true
+  },
+  assignedTeamMember: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'TeamMember',
+    default: null,
+    index: true
+  },
   messages: [messageSchema],
   processedMessageIds: [{
     type: String
@@ -123,5 +135,7 @@ const conversationSchema = new mongoose.Schema({
 conversationSchema.index({ lead: 1 });
 conversationSchema.index({ status: 1 });
 conversationSchema.index({ user: 1 });
+conversationSchema.index({ user: 1, conversationOwnerType: 1 });
+conversationSchema.index({ user: 1, assignedTeamMember: 1 });
 
 module.exports = mongoose.model('Conversation', conversationSchema);

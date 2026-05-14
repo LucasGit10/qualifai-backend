@@ -66,6 +66,22 @@ const leadSchema = new mongoose.Schema({
     trim: true,
     maxlength: 120
   },
+  debtorNotes: [{
+    content: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 1000
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }
+  }],
   hubspot: {
     contactId: String,
     dealId: String,

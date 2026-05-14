@@ -4,6 +4,7 @@ const conversationController = require('../../controllers/conversations/conversa
 const auth = require('../../middleware/auth');
 
 router.get('/', auth, conversationController.getConversations);
+router.post('/actions/assign-legacy-to-master', auth, conversationController.assignLegacyToMaster);
 router.get('/lead/:leadId', auth, conversationController.getConversationsByLead);
 router.get('/:id', auth, conversationController.getConversationById);
 router.put('/:id/status', auth, conversationController.updateConversationStatus);

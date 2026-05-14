@@ -895,6 +895,7 @@ class SpreadsheetController {
             charges: 1,
             status: "$leadInfo.status",
             manualReportStatus: "$leadInfo.manualReportStatus",
+            debtorNotes: { $ifNull: ["$leadInfo.debtorNotes", []] },
             tags: "$leadInfo.tags",
             contacts: "$leadInfo.contacts"
           }
@@ -946,6 +947,59 @@ class SpreadsheetController {
       res.json({ success: true, lead });
     } catch (e) {
       logger.error('[updateDebtorReportStatus] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
+
+  async addDebtorNote(req, res) {
+    try {
+      const userId = req.user.id;
+      const { leadId } = req.params;
+      const content = String(req.body.content || '').trim();
+
+      if (!content) {
+        return res.status(400).json({ message: 'Informe a nota do devedor.' });
+      }
+
+      if (content.length > 1000) {
+        return res.status(400).json({ message: 'A nota deve ter no maximo 1000 caracteres.' });
+      }
+
+      const note = {
+        content,
+        createdAt: new Date(),
+        createdBy: userId
+      };
+
+      const lead = await Lead.findOneAndUpdate(
+        { _id: leadId, user: userId },
+        { $push: { debtorNotes: note } },
+        { new: true }
+      ).select('_id debtorNotes');
+
+      if (!lead) return res.status(404).json({ message: 'Devedor nao encontrado.' });
+      res.status(201).json({ success: true, notes: lead.debtorNotes || [] });
+    } catch (e) {
+      logger.error('[addDebtorNote] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
+
+  async deleteDebtorNote(req, res) {
+    try {
+      const userId = req.user.id;
+      const { leadId, noteId } = req.params;
+
+      const lead = await Lead.findOneAndUpdate(
+        { _id: leadId, user: userId },
+        { $pull: { debtorNotes: { _id: noteId } } },
+        { new: true }
+      ).select('_id debtorNotes');
+
+      if (!lead) return res.status(404).json({ message: 'Devedor nao encontrado.' });
+      res.json({ success: true, notes: lead.debtorNotes || [] });
+    } catch (e) {
+      logger.error('[deleteDebtorNote] Erro:', e);
       res.status(500).json({ message: e.message });
     }
   }
@@ -1105,15 +1159,14 @@ class SpreadsheetController {
         };
 
         doc.fillColor('#000000').fontSize(13).font('Helvetica-Bold').text('Listagem para impressao - um devedor por linha');
-        doc.fillColor(secondaryColor).fontSize(9).font('Helvetica').text('Inclui status manual e movimento calculado pela comparacao da ultima importacao com a base anterior.');
+        doc.fillColor(secondaryColor).fontSize(9).font('Helvetica').text('Inclui status manual do devedor.');
         doc.moveDown(1);
 
         const columns = [
           { title: 'Nome', x: 50, width: 170 },
           { title: 'Telefone', x: 220, width: 92 },
-          { title: 'Status manual', x: 312, width: 115 },
-          { title: 'Movimento', x: 427, width: 88 },
-          { title: 'Total', x: 515, width: 70 }
+          { title: 'Status', x: 312, width: 150 },
+          { title: 'Total', x: 465, width: 90 }
         ];
         const drawHeader = () => {
           const y = doc.y;
@@ -1132,13 +1185,11 @@ class SpreadsheetController {
           if (index % 2 === 0) doc.rect(45, y - 2, 510, 18).fill('#f8fafc');
           const reportStatus = d.leadInfo?.manualReportStatus || d.leadInfo?.status || '-';
           const phone = d.telefone1 || d.telefone2 || d.leadInfo?.phone;
-          const movement = formatImportStatus(d.importStatus);
           const total = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.totalGeral || 0);
           doc.fillColor('#111827').fontSize(8).font('Helvetica').text(d.cliente || '-', columns[0].x, y, { width: columns[0].width, ellipsis: true });
           doc.text(fmtPhone(phone), columns[1].x, y, { width: columns[1].width });
           doc.text(reportStatus, columns[2].x, y, { width: columns[2].width, ellipsis: true });
-          doc.text(movement, columns[3].x, y, { width: columns[3].width, ellipsis: true });
-          doc.text(total, columns[4].x, y, { width: columns[4].width, align: 'right' });
+          doc.text(total, columns[3].x, y, { width: columns[3].width, align: 'right' });
           doc.y = y + 18;
         });
 

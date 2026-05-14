@@ -34,6 +34,8 @@ router.get('/export/debtors', auth, spreadsheetController.exportDebtorsReport);
 router.get('/by-month', auth, spreadsheetController.getByMonth);
 router.get('/import-batches', auth, spreadsheetController.getImportBatches);
 router.put('/debtors/:leadId/report-status', auth, spreadsheetController.updateDebtorReportStatus);
+router.post('/debtors/:leadId/notes', auth, spreadsheetController.addDebtorNote);
+router.delete('/debtors/:leadId/notes/:noteId', auth, spreadsheetController.deleteDebtorNote);
 router.delete('/clear', auth, spreadsheetController.clearData);
 
 // ── Diagnóstico e Correção de Duplicatas ────────────────────────────────────

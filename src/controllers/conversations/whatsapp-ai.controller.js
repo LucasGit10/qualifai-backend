@@ -4,6 +4,7 @@ const Conversation = getModel('Conversation');
 const User = getModel('User');
 const WhatsAppInstance = getModel('WhatsAppInstance');
 const MessageTemplate = getModel('MessageTemplate');
+const TeamMember = getModel('TeamMember');
 const aiService = require('../../services/aiService');
 const whatsappService = require('../../services/whatsappService');
 const oneSignalService = require('../../services/oneSignalService');
@@ -19,6 +20,33 @@ const disableAiWithoutReply = (conversation, channel) => {
     content: 'IA desativada automaticamente por indisponibilidade ao processar a mensagem.',
     channel,
   });
+};
+
+const resolveConversationOwner = async (userId, { conversationOwnerType, teamMemberId } = {}) => {
+  if (conversationOwnerType === 'teamMember' || teamMemberId) {
+    if (!teamMemberId) {
+      const error = new Error('Selecione o perfil que vai iniciar a conversa.');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const teamMember = await TeamMember.findOne({ _id: teamMemberId, owner: userId, isActive: true });
+    if (!teamMember) {
+      const error = new Error('Perfil de atendimento nao encontrado ou inativo.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return {
+      conversationOwnerType: 'teamMember',
+      assignedTeamMember: teamMember._id
+    };
+  }
+
+  return {
+    conversationOwnerType: 'master',
+    assignedTeamMember: null
+  };
 };
 
 // buildTemplateComponents (Mantido 100% - Sem alterações)
@@ -129,7 +157,7 @@ class WhatsAppAIController {
   // startConversationWithTemplate (Mantido 100% - Sem alterações)
   startConversationWithTemplate = async (req, res) => {
     try {
-      const { leadId, instanceId, templateId, mediaUrl, imageUrl } = req.body;
+	      const { leadId, instanceId, templateId, mediaUrl, imageUrl, conversationOwnerType, teamMemberId } = req.body;
       const userId = req.user.id;
       
       let finalMediaUrl = mediaUrl || imageUrl; // Suporta ambos os nomes de campo
@@ -147,15 +175,17 @@ class WhatsAppAIController {
       const template = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
       if (!template) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
 
-      if (!finalMediaUrl) finalMediaUrl = template.sampleMediaUrl;
-      const components = buildTemplateComponents(template, lead, finalMediaUrl);
+	      if (!finalMediaUrl) finalMediaUrl = template.sampleMediaUrl;
+	      const components = buildTemplateComponents(template, lead, finalMediaUrl);
+	      const ownerFields = await resolveConversationOwner(userId, { conversationOwnerType, teamMemberId });
 
-      const conversation = new Conversation({
-        lead: leadId,
-        channel: 'whatsapp',
-        user: userId,
-        instance: instanceId,
-        messages: [{
+	      const conversation = new Conversation({
+	        lead: leadId,
+	        channel: 'whatsapp',
+	        user: userId,
+	        instance: instanceId,
+	        ...ownerFields,
+	        messages: [{
           role: 'ai',
           content: `Conversa iniciada com o template: ${template.name}`,
           channel: 'whatsapp',
@@ -187,8 +217,9 @@ class WhatsAppAIController {
 
       res.status(200).json({ success: true, message: 'Conversa iniciada com sucesso via template.', conversation });
     } catch (error) {
-      logger.error('Erro ao iniciar conversa com template:', error);
-      res.status(500).json({ message: 'Erro interno do servidor', details: error.message });
+	      logger.error('Erro ao iniciar conversa com template:', error);
+	      if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
+	      res.status(500).json({ message: 'Erro interno do servidor', details: error.message });
     }
   }
 
@@ -391,7 +422,8 @@ class WhatsAppAIController {
         res.json({ success: true, conversation, aiResponse });
     } catch (error) {
         logger.error('Erro ao processar resposta do lead (WhatsApp):', error);
-        res.status(500).json({ message: 'Erro interno do servidor' });
+	        if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
+	        res.status(500).json({ message: 'Erro interno do servidor' });
     }
   }
   // ==========================================================
@@ -401,7 +433,7 @@ class WhatsAppAIController {
   // startMultipleConversationsWithTemplate (Mantido 100% - Sem alterações)
   startMultipleConversationsWithTemplate = async (req, res) => {
     try {
-        const { leadIds, instanceId, templateId } = req.body;
+	        const { leadIds, instanceId, templateId, mediaUrl, imageUrl, conversationOwnerType, teamMemberId } = req.body;
         const userId = req.user.id;
 
         if (!Array.isArray(leadIds) || !instanceId || !templateId) {
@@ -412,6 +444,8 @@ class WhatsAppAIController {
         if (!instance) return res.status(404).json({ message: 'Instância não encontrada ou desconectada.' });
 
         const template = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
+	        const finalMediaUrl = mediaUrl || imageUrl || template?.sampleMediaUrl;
+	        const ownerFields = await resolveConversationOwner(userId, { conversationOwnerType, teamMemberId });
         if (!template) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
 
         let successCount = 0;
@@ -429,10 +463,11 @@ class WhatsAppAIController {
                 
                 const conversation = new Conversation({
                     lead: leadId,
-                    channel: 'whatsapp',
-                    user: userId,
-                    instance: instanceId,
-                    messages: [{
+	                    channel: 'whatsapp',
+	                    user: userId,
+	                    instance: instanceId,
+	                    ...ownerFields,
+	                    messages: [{
                         role: 'ai',
                         content: `Conversa iniciada com o template: ${template.name}`,
                         channel: 'whatsapp',
@@ -444,7 +479,7 @@ class WhatsAppAIController {
                 lead.lastContact = new Date();
                 await lead.save();
 
-                const components = buildTemplateComponents(template, lead);
+                const components = buildTemplateComponents(template, lead, finalMediaUrl);
                 
                 await this._sendMessageHelper(lead, {
                     type: 'template',

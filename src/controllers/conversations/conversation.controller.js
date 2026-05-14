@@ -10,17 +10,24 @@ class ConversationController {
   // Dentro da função getConversations no ConversationController
   async getConversations(req, res) {
     try {
-      const { page = 1, limit = 16, status, channel } = req.query;
+	      const { page = 1, limit = 16, status, channel, owner = 'master', teamMemberId } = req.query;
       const userId = req.user.id;
 
-      const filter = { user: userId };
-      if (status) filter.status = status;
-      if (channel) filter.channel = channel;
+	      const filter = { user: userId };
+	      if (status) filter.status = status;
+	      if (channel) filter.channel = channel;
+	      if (teamMemberId) {
+	        filter.conversationOwnerType = 'teamMember';
+	        filter.assignedTeamMember = teamMemberId;
+	      } else if (owner === 'master') {
+	        filter.conversationOwnerType = 'master';
+	      }
 
       const conversations = await Conversation.find(filter)
         .populate('lead', 'name phone email company')
         // Adicionar o populate para a instância
-        .populate('instance', 'instanceName phoneNumber') 
+	        .populate('instance', 'instanceName phoneNumber')
+	        .populate('assignedTeamMember', 'name roleLabel')
         .sort({ handedOffToHuman: -1, lastMessageAt: -1, updatedAt: -1 })
         .limit(limit * 1)
         .skip((page - 1) * limit);
@@ -43,17 +50,49 @@ class ConversationController {
       logger.error('Erro ao listar conversas:', error);
       res.status(500).json({ message: 'Erro interno do servidor' });
     }
+	  }
+
+  async assignLegacyToMaster(req, res) {
+    try {
+      const userId = req.user.id;
+      const result = await Conversation.updateMany(
+        {
+          user: userId,
+          $or: [
+            { conversationOwnerType: { $exists: false } },
+            { conversationOwnerType: null },
+            { conversationOwnerType: '' }
+          ]
+        },
+        {
+          $set: { conversationOwnerType: 'master' },
+          $unset: { assignedTeamMember: '' }
+        }
+      );
+
+      req.app.get('io')?.to(`user-${userId}`).emit('conversation_updated', {});
+
+      res.json({
+        success: true,
+        modifiedCount: result.modifiedCount || 0,
+        message: `${result.modifiedCount || 0} conversas antigas associadas ao usuario mestre.`
+      });
+    } catch (error) {
+      logger.error('Erro ao associar conversas antigas ao mestre:', error);
+      res.status(500).json({ message: 'Erro interno do servidor' });
+    }
   }
 
-  // Buscar conversa por ID
-  async getConversationById(req, res) {
+	  // Buscar conversa por ID
+	  async getConversationById(req, res) {
     try {
       const conversation = await Conversation.findOne({
         _id: req.params.id,
         user: req.user.id
       })
       .populate('lead', 'name email company phone position')
-      .populate('instance', 'instanceName phoneNumber'); // <--- Adicione esta linha
+      .populate('instance', 'instanceName phoneNumber')
+      .populate('assignedTeamMember', 'name roleLabel'); // <--- Adicione esta linha
 
       if (!conversation) {
         return res.status(404).json({ message: 'Conversa não encontrada' });
