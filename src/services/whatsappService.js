@@ -26,21 +26,90 @@ const getLocalUploadPathFromUrl = (mediaUrl) => {
 };
 
 const uploadTemplateMediaToMeta = async (instance, mediaUrl, mediaType) => {
-    const localPath = getLocalUploadPathFromUrl(mediaUrl);
-    if (!localPath) return null;
-
     const token = instance.apiCredentials.token;
-    const url = `https://graph.facebook.com/${API_VERSION}/${instance.phoneNumberId}/media`;
-    const form = new FormData();
-    const contentType = mime.lookup(localPath) || `${mediaType}/jpeg`;
+    const apiUrl = `https://graph.facebook.com/${API_VERSION}/${instance.phoneNumberId}/media`;
 
+    // Tenta arquivo local primeiro
+    const localPath = getLocalUploadPathFromUrl(mediaUrl);
+    if (localPath) {
+        const form = new FormData();
+        const contentType = mime.lookup(localPath) || `${mediaType}/jpeg`;
+
+        form.append('messaging_product', 'whatsapp');
+        form.append('file', fs.createReadStream(localPath), {
+            filename: path.basename(localPath),
+            contentType
+        });
+
+        const response = await axios.post(apiUrl, form, {
+            headers: {
+                ...form.getHeaders(),
+                Authorization: `Bearer ${token}`
+            },
+            httpsAgent,
+            timeout: REQUEST_TIMEOUT
+        });
+
+        logger.info('[Template Media] Midia local enviada para a Meta antes do template.', {
+            mediaType,
+            mediaId: response.data?.id,
+            filename: path.basename(localPath)
+        });
+
+        return response.data?.id || null;
+    }
+
+    // Fallback: Arquivo local não existe, tenta baixar pela URL pública e subir para a Meta
+    logger.info('[Template Media] Arquivo local não encontrado. Tentando download remoto.', { mediaUrl });
+
+    // Tenta variações da URL (com e sem /api/)
+    const candidates = [mediaUrl];
+    if (mediaUrl.includes('/uploads/') && !mediaUrl.includes('/api/uploads/')) {
+        candidates.push(mediaUrl.replace('/uploads/', '/api/uploads/'));
+    }
+    if (mediaUrl.includes('/api/uploads/')) {
+        candidates.push(mediaUrl.replace('/api/uploads/', '/uploads/'));
+    }
+
+    let downloadBuffer = null;
+    let downloadContentType = null;
+    let downloadFilename = path.basename(new URL(mediaUrl).pathname);
+
+    for (const candidateUrl of [...new Set(candidates)]) {
+        try {
+            const downloadResponse = await axios.get(candidateUrl, {
+                responseType: 'arraybuffer',
+                timeout: 20000,
+                maxRedirects: 5,
+                validateStatus: status => status >= 200 && status < 300
+            });
+            downloadBuffer = Buffer.from(downloadResponse.data);
+            downloadContentType = (downloadResponse.headers['content-type'] || '').split(';')[0].trim();
+            logger.info('[Template Media] Download remoto bem-sucedido.', { candidateUrl, size: downloadBuffer.length });
+            break;
+        } catch (dlError) {
+            logger.warn('[Template Media] Falha ao baixar midia remota.', {
+                candidateUrl,
+                status: dlError.response?.status,
+                message: dlError.message
+            });
+        }
+    }
+
+    if (!downloadBuffer) {
+        logger.warn('[Template Media] Nenhuma fonte de midia disponivel (local ou remota). Link original sera mantido.', { mediaUrl });
+        return null;
+    }
+
+    const finalContentType = downloadContentType || mime.lookup(downloadFilename) || `${mediaType}/jpeg`;
+    const form = new FormData();
     form.append('messaging_product', 'whatsapp');
-    form.append('file', fs.createReadStream(localPath), {
-        filename: path.basename(localPath),
-        contentType
+    form.append('file', downloadBuffer, {
+        filename: downloadFilename,
+        contentType: finalContentType
     });
 
-    const response = await axios.post(url, form, {
+    const response = await axios.post(apiUrl, form, {
         headers: {
             ...form.getHeaders(),
             Authorization: `Bearer ${token}`
@@ -49,10 +118,10 @@ const uploadTemplateMediaToMeta = async (instance, mediaUrl, mediaType) => {
         timeout: REQUEST_TIMEOUT
     });
 
-    logger.info('[Template Media] Midia local enviada para a Meta antes do template.', {
+    logger.info('[Template Media] Midia remota enviada para a Meta com sucesso.', {
         mediaType,
         mediaId: response.data?.id,
-        filename: path.basename(localPath)
+        filename: downloadFilename
     });
 
     return response.data?.id || null;
