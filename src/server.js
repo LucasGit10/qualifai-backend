@@ -126,6 +126,11 @@ const publicUploadsPath = path.join(__dirname, '..', 'public/uploads');
 app.use('/uploads', express.static(publicUploadsPath));
 app.use('/api/uploads', express.static(publicUploadsPath));
 
+// Assets de templates commitados no repositório (persistem entre deploys)
+const templateAssetsPath = path.join(__dirname, '..', 'public/template-assets');
+app.use('/uploads', express.static(templateAssetsPath));
+app.use('/api/uploads', express.static(templateAssetsPath));
+
 // Inicializa o Socket.io via Hub (evita dependência circular)
 const io = socketHub.init(server);
 app.set('io', io);

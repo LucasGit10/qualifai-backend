@@ -18,8 +18,13 @@ const getLocalUploadPathFromUrl = (mediaUrl) => {
         const parsed = new URL(mediaUrl);
         if (!parsed.pathname.includes('/uploads/')) return null;
         const filename = path.basename(parsed.pathname);
-        const localPath = path.join(__dirname, '../../public/uploads', filename);
-        return fs.existsSync(localPath) ? localPath : null;
+        // Tenta primeiro em public/uploads (uploads dinâmicos)
+        const uploadsPath = path.join(__dirname, '../../public/uploads', filename);
+        if (fs.existsSync(uploadsPath)) return uploadsPath;
+        // Fallback: template-assets (commitados no repo, persistem entre deploys)
+        const assetsPath = path.join(__dirname, '../../public/template-assets', filename);
+        if (fs.existsSync(assetsPath)) return assetsPath;
+        return null;
     } catch (error) {
         return null;
     }
@@ -129,8 +134,12 @@ const uploadTemplateMediaToMeta = async (instance, mediaUrl, mediaType) => {
 
 const normalizeTemplateMediaComponents = async (instance, components = []) => {
     const normalized = JSON.parse(JSON.stringify(components));
+    const componentsToRemove = [];
 
-    for (const component of normalized) {
+    for (let i = 0; i < normalized.length; i++) {
+        const component = normalized[i];
+        let allMediaFailed = false;
+
         for (const parameter of component.parameters || []) {
             const mediaType = parameter.type;
             if (!['image', 'video', 'document'].includes(mediaType)) continue;
@@ -142,15 +151,34 @@ const normalizeTemplateMediaComponents = async (instance, components = []) => {
                 const mediaId = await uploadTemplateMediaToMeta(instance, mediaPayload.link, mediaType);
                 if (mediaId) {
                     parameter[mediaType] = { id: mediaId };
+                } else {
+                    // Upload retornou null = nenhuma fonte disponível (local ou remota)
+                    // Marcar para remoção em vez de enviar link quebrado
+                    logger.warn('[Template Media] Midia indisponivel. Removendo header de midia do payload para evitar erro 404.', {
+                        mediaType,
+                        mediaUrl: mediaPayload.link
+                    });
+                    allMediaFailed = true;
                 }
             } catch (error) {
-                logger.warn('[Template Media] Falha ao subir midia local para a Meta. Enviando por link como fallback.', {
+                logger.warn('[Template Media] Falha ao subir midia para a Meta. Removendo header de midia do payload.', {
                     mediaType,
                     mediaUrl: mediaPayload.link,
                     error: error.response?.data?.error || error.message
                 });
+                allMediaFailed = true;
             }
         }
+
+        // Se todos os parâmetros de mídia falharam neste componente header, removê-lo
+        if (allMediaFailed && component.type === 'header') {
+            componentsToRemove.push(i);
+        }
+    }
+
+    // Remove componentes header de mídia que falharam (de trás para frente)
+    for (let i = componentsToRemove.length - 1; i >= 0; i--) {
+        normalized.splice(componentsToRemove[i], 1);
     }
 
     return normalized;
