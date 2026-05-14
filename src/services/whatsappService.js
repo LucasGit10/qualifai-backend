@@ -2,6 +2,9 @@
 const axios = require('axios');
 const FormData = require('form-data');
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const mime = require('mime-types');
 const logger = require('../utils/logger'); // Ajuste o caminho se necessário
 
 const API_VERSION = 'v23.0'; // Usando uma versão mais recente
@@ -9,6 +12,80 @@ const REQUEST_TIMEOUT = 15000; // Timeout de 15 segundos
 
 // Agente HTTPS para forçar IPv4, ajuda a evitar erros de timeout EADDRNOTAVAIL
 const httpsAgent = new https.Agent({ family: 4 });
+
+const getLocalUploadPathFromUrl = (mediaUrl) => {
+    try {
+        const parsed = new URL(mediaUrl);
+        if (!parsed.pathname.includes('/uploads/')) return null;
+        const filename = path.basename(parsed.pathname);
+        const localPath = path.join(__dirname, '../../public/uploads', filename);
+        return fs.existsSync(localPath) ? localPath : null;
+    } catch (error) {
+        return null;
+    }
+};
+
+const uploadTemplateMediaToMeta = async (instance, mediaUrl, mediaType) => {
+    const localPath = getLocalUploadPathFromUrl(mediaUrl);
+    if (!localPath) return null;
+
+    const token = instance.apiCredentials.token;
+    const url = `https://graph.facebook.com/${API_VERSION}/${instance.phoneNumberId}/media`;
+    const form = new FormData();
+    const contentType = mime.lookup(localPath) || `${mediaType}/jpeg`;
+
+    form.append('messaging_product', 'whatsapp');
+    form.append('file', fs.createReadStream(localPath), {
+        filename: path.basename(localPath),
+        contentType
+    });
+
+    const response = await axios.post(url, form, {
+        headers: {
+            ...form.getHeaders(),
+            Authorization: `Bearer ${token}`
+        },
+        httpsAgent,
+        timeout: REQUEST_TIMEOUT
+    });
+
+    logger.info('[Template Media] Midia local enviada para a Meta antes do template.', {
+        mediaType,
+        mediaId: response.data?.id,
+        filename: path.basename(localPath)
+    });
+
+    return response.data?.id || null;
+};
+
+const normalizeTemplateMediaComponents = async (instance, components = []) => {
+    const normalized = JSON.parse(JSON.stringify(components));
+
+    for (const component of normalized) {
+        for (const parameter of component.parameters || []) {
+            const mediaType = parameter.type;
+            if (!['image', 'video', 'document'].includes(mediaType)) continue;
+
+            const mediaPayload = parameter[mediaType];
+            if (!mediaPayload?.link || mediaPayload.id) continue;
+
+            try {
+                const mediaId = await uploadTemplateMediaToMeta(instance, mediaPayload.link, mediaType);
+                if (mediaId) {
+                    parameter[mediaType] = { id: mediaId };
+                }
+            } catch (error) {
+                logger.warn('[Template Media] Falha ao subir midia local para a Meta. Enviando por link como fallback.', {
+                    mediaType,
+                    mediaUrl: mediaPayload.link,
+                    error: error.response?.data?.error || error.message
+                });
+            }
+        }
+    }
+
+    return normalized;
+};
 
 /**
  * Envia uma mensagem de texto simples via WhatsApp.
@@ -174,14 +251,17 @@ async function exchangeCodeForTokensAndInfo(code) {
 async function sendTemplateMessage(instance, to, templateName, languageCode, components) {
     const url = `https://graph.facebook.com/${API_VERSION}/${instance.phoneNumberId}/messages`;
     const token = instance.apiCredentials.token;
+    const normalizedComponents = components?.length
+        ? await normalizeTemplateMediaComponents(instance, components)
+        : components;
 
     const templatePayload = {
         name: templateName,
         language: { code: languageCode || 'pt_BR' }
     };
 
-    if (components && components.length > 0) {
-        templatePayload.components = components;
+    if (normalizedComponents && normalizedComponents.length > 0) {
+        templatePayload.components = normalizedComponents;
     }
     
     /*

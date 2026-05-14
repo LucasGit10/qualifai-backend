@@ -824,6 +824,14 @@ async function receiveWebhook(req, res) {
                 if (value.statuses) {
                     for (const statusUpdate of value.statuses) {
                         logger.info(`[WEBHOOK] STATUS UPDATE: Mensagem ${statusUpdate.id} para ${statusUpdate.recipient_id} agora está '${statusUpdate.status}'.`);
+                        const statusErrors = statusUpdate.errors || [];
+                        if (statusUpdate.status === 'failed' && statusErrors.length > 0) {
+                            logger.warn('[WEBHOOK] Detalhes da falha da mensagem Meta.', {
+                                messageId: statusUpdate.id,
+                                recipientId: statusUpdate.recipient_id,
+                                errors: statusErrors
+                            });
+                        }
                         const lead = await Lead.findOne({ phone: statusUpdate.recipient_id, user: instance.user._id });
                         if (lead) {
                             const statusKey = `${statusUpdate.id}:${statusUpdate.status}`;
@@ -845,11 +853,14 @@ async function receiveWebhook(req, res) {
                                     $push: {
                                         messages: {
                                             role: 'system',
-                                            content: `[Status da Mensagem] Status alterado para: ${statusUpdate.status.toUpperCase()}`,
+                                            content: statusUpdate.status === 'failed' && statusErrors[0]
+                                                ? `[Status da Mensagem] Falha no envio: ${statusErrors[0].title || statusErrors[0].message || statusErrors[0].code || 'erro informado pela Meta'}`
+                                                : `[Status da Mensagem] Status alterado para: ${statusUpdate.status.toUpperCase()}`,
                                             channel: 'whatsapp',
                                             metadata: {
                                                 providerMessageId: statusUpdate.id,
-                                                providerStatus: statusUpdate.status
+                                                providerStatus: statusUpdate.status,
+                                                providerErrors: statusErrors
                                             }
                                         }
                                     }
