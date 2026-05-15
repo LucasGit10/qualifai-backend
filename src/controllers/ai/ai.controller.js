@@ -73,7 +73,7 @@ const syncWithEnabledIntegrations = async (lead, conversation, user) => {
 };
 
 // Função auxiliar para construir o payload de componentes do template
-const buildTemplateComponents = (template, lead) => {
+const buildTemplateComponents = (template, lead, userSettings = {}) => {
   const components = [];
 
   template.components.forEach(component => {
@@ -83,14 +83,14 @@ const buildTemplateComponents = (template, lead) => {
     let textWithVars = component.text;
     if (textWithVars) {
         // Esta lógica assume que as variáveis no template são {{1}} para nome e {{2}} para empresa.
-        // Adapte conforme a necessidade se tiver mais variáveis.
         if (textWithVars.includes('{{1}}')) {
             parameters.push({ type: 'text', text: lead.name || 'Cliente' });
         }
         if (textWithVars.includes('{{2}}')) {
-            parameters.push({ type: 'text', text: lead.company || 'sua empresa' });
+            // Usa o nome da empresa do usuário (credor) em vez da empresa do devedor
+            const companyName = userSettings?.company?.name || userSettings?.settings?.company?.name || 'QualifAI';
+            parameters.push({ type: 'text', text: companyName });
         }
-        // Adicionar mais 'if' para {{3}}, {{4}}, etc., se necessário.
 
         if (parameters.length > 0) {
           componentPayload.parameters = parameters;
@@ -127,9 +127,9 @@ class AIController {
       const messageTemplate = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
       if (!messageTemplate) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
 
-      const components = buildTemplateComponents(messageTemplate, lead);
-      
       const user = await User.findById(userId);
+      const components = buildTemplateComponents(messageTemplate, lead, user);
+      
       const conversation = new Conversation({
         lead: leadId,
         channel,
@@ -148,7 +148,7 @@ class AIController {
         {
           type: 'template',
           templateName: messageTemplate.name,
-          templateLanguage: messageTemplate.language, // Enviando o idioma do template
+          templateLanguage: messageTemplate.language,
           components: components,
           content: `Template "${messageTemplate.name}" enviado.`,
         },
@@ -213,7 +213,6 @@ class AIController {
             conversation.status = 'escalated';
             conversation.aiEnabled = false;
 
-            // Gerar resumo da conversa para o atendente humano
             let conversationSummary = '';
             try {
                 conversationSummary = await aiService.summarizeConversation(conversation.messages, lead);
@@ -229,7 +228,6 @@ class AIController {
                 channel: conversation.channel,
             });
 
-            // Adiciona o resumo como mensagem de sistema para o atendente
             conversation.messages.push({
                 role: 'system',
                 content: `📋 RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
@@ -309,7 +307,7 @@ class AIController {
                 }
                 conversation.schedulingAttempt.status = 'negotiating';
                 conversation.schedulingAttempt.proposedTimes = []; // Clear old suggestions
-                const aiResult = await aiService.generateResponse(conversation, lead, user.settings);
+                const aiResult = await aiService.generateResponse(conversation, lead, user);
                 if (isAiUnavailableResult(aiResult)) {
                     logger.warn('[AI Action] IA indisponivel. Desativando conversa sem enviar resposta ao lead.', {
                         conversationId: conversation._id,
@@ -325,7 +323,7 @@ class AIController {
                 aiResponse = getAiReply(aiResult);
             }
         } else {
-            const aiResult = await aiService.generateResponse(conversation, lead, user.settings);
+            const aiResult = await aiService.generateResponse(conversation, lead, user);
             if (isAiUnavailableResult(aiResult)) {
                 logger.warn('[AI Action] IA indisponivel. Desativando conversa sem enviar resposta ao lead.', {
                     conversationId: conversation._id,
@@ -340,7 +338,6 @@ class AIController {
             }
             aiResponse = getAiReply(aiResult);
             
-            // Lógica de classificação de prioridade de cobrança
             if (['novo', 'contatado', 'morno', 'frio'].includes(lead.status)) {
                 const classification = await aiService.classifyLead(conversation, lead, user.settings);
                 
@@ -366,7 +363,6 @@ class AIController {
                     }
 
                 } else {
-                    // Para morno ou frio, marcamos como contatado se ainda estiver no início
                     if (lead.status === 'novo') lead.status = 'contatado';
                 }
                 
@@ -410,13 +406,11 @@ class AIController {
       const { conversationId } = req.body;
       const userId = req.user.id;
 
-      // Primeiro busca a conversa para gerar o resumo antes de atualizar
       const conversation = await Conversation.findOne({ _id: conversationId, user: userId }).populate('lead');
       if (!conversation) {
         return res.status(404).json({ message: 'Conversa não encontrada' });
       }
 
-      // Gerar resumo da conversa para o atendente humano
       let conversationSummary = '';
       try {
         conversationSummary = await aiService.summarizeConversation(conversation.messages, conversation.lead);
@@ -426,7 +420,6 @@ class AIController {
         conversationSummary = 'Não foi possível gerar o resumo automático.';
       }
 
-      // Atualiza a conversa com o status de escalação e o resumo
       conversation.handedOffToHuman = true;
       conversation.handedOffAt = new Date();
       conversation.status = 'escalated';
@@ -491,7 +484,7 @@ class AIController {
                 instance,
                 lead.phone,
                 messagePayload.templateName,
-                messagePayload.templateLanguage, // Passando o idioma
+                messagePayload.templateLanguage,
                 messagePayload.components
               );
             } else if (messagePayload.type === 'audio') {
@@ -560,7 +553,7 @@ class AIController {
                     return { status: 'error', reason: `Lead ${lead.name} já possui uma conversa ativa.` };
                 }
 
-                const components = buildTemplateComponents(messageTemplate, lead);
+                const components = buildTemplateComponents(messageTemplate, lead, user);
 
                 const conversation = new Conversation({
                     lead: leadId,
@@ -580,7 +573,7 @@ class AIController {
                   { 
                     type: 'template', 
                     templateName: messageTemplate.name,
-                    templateLanguage: messageTemplate.language, // Enviando o idioma
+                    templateLanguage: messageTemplate.language,
                     components 
                   },
                   channel, 

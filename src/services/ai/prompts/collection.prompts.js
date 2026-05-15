@@ -39,7 +39,8 @@ function getCollectionModeInstruction(mode) {
  * @returns {string} System prompt completo
  */
 function buildCollectionSystemPrompt(aiConfig = {}, leadData = {}, channel = 'whatsapp') {
-  const companyName = leadData.company || aiConfig.companyName || 'de cobrança';
+  const companyName = aiConfig.companyName || 'nossa empresa';
+  const debtorCompany = leadData.company || 'Não informado';
   const isWhatsApp = channel === 'whatsapp';
   const collectionMode = normalizeCollectionMode(aiConfig.salesMethodology);
   const collectionModeInstruction = getCollectionModeInstruction(collectionMode);
@@ -102,7 +103,8 @@ Responda SEMPRE com JSON válido e nada além do JSON:
   const agentPersona = `
 ### CONTEXTO DA PENDÊNCIA
 - *Cliente:* ${leadData.name || 'Não identificado'}
-- *Empresa/Credor:* ${companyName}
+- *Empresa do Cliente/Devedor:* ${debtorCompany}
+- *Sua Empresa (Credor):* ${companyName}
 - *Idioma:* ${aiConfig.language || 'Português do Brasil'}
 - *Perfil de Cobrança Humanizada:* ${collectionMode}
 - *Canal:* ${channel || 'whatsapp'}

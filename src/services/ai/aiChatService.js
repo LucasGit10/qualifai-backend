@@ -39,13 +39,17 @@ class AiChatService {
   async generateResponse(conversation, leadData, userSettings) {
     try {
       const aiConfig = userSettings?.aiConfig || userSettings?.settings?.aiConfig || {};
+      // Injeta o nome da empresa do operador/credor no aiConfig para o prompt usar
+      if (!aiConfig.companyName) {
+        aiConfig.companyName = userSettings?.company?.name || userSettings?.settings?.company?.name || '';
+      }
       const systemPrompt = buildCollectionSystemPrompt(aiConfig, leadData, conversation.channel);
 
       const messages = [
         { role: 'system', content: systemPrompt },
         {
           role: 'system',
-          content: `Cliente: Nome: ${leadData.name}, Empresa/Credor: ${leadData.company}, Status: ${leadData.status || 'novo'}`,
+          content: `Devedor: Nome: ${leadData.name}, Empresa do Devedor: ${leadData.company || 'N/A'}, Status: ${leadData.status || 'novo'}`,
         },
         ...conversation.messages.map(msg => ({
           role: msg.role === 'ai' ? 'assistant' : 'user',

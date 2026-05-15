@@ -49,8 +49,7 @@ const resolveConversationOwner = async (userId, { conversationOwnerType, teamMem
   };
 };
 
-// buildTemplateComponents (Mantido 100% - Sem alterações)
-const buildTemplateComponents = (template, lead, mediaUrl = null) => {
+const buildTemplateComponents = (template, lead, mediaUrl = null, userSettings = {}) => {
   const components = [];
 
   template.components.forEach(component => {
@@ -92,7 +91,8 @@ const buildTemplateComponents = (template, lead, mediaUrl = null) => {
           if (varNum === 1) {
             value = lead.name || 'Cliente';
           } else if (varNum === 2) {
-            value = lead.company || 'sua empresa';
+            // Usa o nome da empresa do usuário (credor) em vez da empresa do devedor
+            value = userSettings?.company?.name || userSettings?.settings?.company?.name || 'QualifAI';
           } else {
             value = `Dado_${varNum}`;
           }
@@ -102,7 +102,6 @@ const buildTemplateComponents = (template, lead, mediaUrl = null) => {
     }
 
     if (parameters.length > 0) {
-      // Verifica se já existe um HEADER de mídia adicionado para anexar parâmetros extras se necessário
       let existingComp = components.find(c => c.type === componentType);
       if (existingComp) {
         existingComp.parameters = [...existingComp.parameters, ...parameters];
@@ -117,7 +116,6 @@ const buildTemplateComponents = (template, lead, mediaUrl = null) => {
 
   return components;
 };
-
 
 class WhatsAppAIController {
 
@@ -176,7 +174,7 @@ class WhatsAppAIController {
       if (!template) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
 
 	      if (!finalMediaUrl) finalMediaUrl = template.sampleMediaUrl;
-	      const components = buildTemplateComponents(template, lead, finalMediaUrl);
+	      const components = buildTemplateComponents(template, lead, finalMediaUrl, req.user);
 	      const ownerFields = await resolveConversationOwner(userId, { conversationOwnerType, teamMemberId });
 
 	      const conversation = new Conversation({
@@ -190,7 +188,6 @@ class WhatsAppAIController {
           content: `Conversa iniciada com o template: ${template.name}`,
           channel: 'whatsapp',
         }]
-        // O conversationState default 'DISCOVERY' será pego do Schema
       });
       await conversation.save();
 
@@ -207,7 +204,6 @@ class WhatsAppAIController {
 
       req.app.get('io').to(`user-${userId}`).emit('new_conversation', { conversation, lead });
       
-      // Disparo de notificação OneSignal
       oneSignalService.sendPushNotification(
         userId,
         'Conversa Iniciada',
@@ -223,9 +219,6 @@ class WhatsAppAIController {
     }
   }
 
-  // ==========================================================
-  // --- processLeadResponse (CORRIGIDO PARA FASE 3) ---
-  // ==========================================================
   processLeadResponse = async (req, res) => {
     try {
         const { conversationId, message } = req.body;
@@ -262,52 +255,38 @@ class WhatsAppAIController {
         }
         
         let aiResponse;
-        let aiResult = null; // Armazena a resposta completa do aiService
+        let aiResult = null;
 
-        // ================== CORREÇÃO DO BUG (FASE 3) ==================
-        // A checagem mudou de `conversation.schedulingAttempt?.status === 'proposed'`
-        // para `conversation.conversationState === 'SCHEDULING'`.
-        //
-        // ETAPA 1: O lead está respondendo a uma proposta de agendamento?
-        // (Verificamos se a IA está no estado de agendamento)
         if (conversation.conversationState === 'SCHEDULING') {
             const schedulingResult = await aiService.parseLeadSchedulingResponse(conversation, message);
             
             if (schedulingResult.status === 'CONFIRMED' && schedulingResult.dateTime) {
-                // SUCESSO: O lead confirmou um horário
                 logger.info(`[Scheduling] Lead ${lead._id} confirmou horário: ${schedulingResult.dateTime}`);
                 const meetingTime = new Date(schedulingResult.dateTime);
                 const { googleMeetLink } = await aiService.createMeetingInCRMs(user, lead, meetingTime);
                 
-                conversation.schedulingAttempt.status = 'confirmed'; // (Mantido para UI/compatibilidade)
+                conversation.schedulingAttempt.status = 'confirmed'; 
                 conversation.status = 'closed';
                 conversation.endedAt = new Date();
-                conversation.conversationState = 'CONVERTED'; // NOVO ESTADO DE FIM
+                conversation.conversationState = 'CONVERTED'; 
                 
                 const formattedDate = meetingTime.toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/Sao_Paulo' });
                 let meetLinkMessage = googleMeetLink ? ` O link para nossa conversa é: ${googleMeetLink}` : '';
                 aiResponse = `Excelente! Reunião agendada para ${formattedDate}.${meetLinkMessage} Algo mais em que posso ajudar?`;
                 
-                lead.status = 'qualificado'; // Status final
-                conversationEnded = true; // --- GATILHO DE ESCRITA (SUCESSO) ---
+                lead.status = 'qualificado'; 
+                conversationEnded = true; 
 
             } else {
-                // NEGOCIAÇÃO: O lead rejeitou ou pediu outro horário (ex: "não posso", "outro dia?").
-                // Deixamos a IA (Fase 3) decidir a próxima ação.
                 logger.info(`[Scheduling] Lead ${lead._id} respondeu no estado SCHEDULING, mas não confirmou. Deixando a IA decidir.`);
                 aiResult = await aiService.generateResponse(conversation, lead, user);
             }
         }
-        // ================== FIM DA CORREÇÃO ==================
         
-        
-        // ETAPA 2: Se nenhuma ação de agendamento foi tomada, gera a resposta padrão
-        if (!aiResult && !aiResponse) { // Só chama a IA se ela já não foi chamada
-            // Passa o 'user' completo
+        if (!aiResult && !aiResponse) { 
             aiResult = await aiService.generateResponse(conversation, lead, user);
         }
         
-        // ETAPA 3: Processa o resultado do aiService (se ele foi chamado)
         if (aiResult) {
             if (isAiUnavailableResult(aiResult)) {
                 logger.warn('[AI Action] IA indisponivel. Desativando conversa sem enviar resposta ao lead.', {
@@ -324,26 +303,20 @@ class WhatsAppAIController {
 
             aiResponse = aiResult.reply;
 
-            // --- ATUALIZAÇÃO DA FASE 3 ---
-            // A IA agora nos diz o novo estado do lead e da conversa
             if (aiResult.leadStatus) {
                 lead.status = aiResult.leadStatus;
             }
             if (aiResult.conversationState) {
                 conversation.conversationState = aiResult.conversationState;
             }
-            // -----------------------------
 
-            // A IA detectou que o lead quer um humano?
             if (aiResult.escalate === true) {
                 logger.info(`[Handoff] Lead ${lead._id} solicitou especialista no WhatsApp. Escalando...`);
                 conversation.handedOffToHuman = true;
                 conversation.handedOffAt = new Date();
                 conversation.status = 'escalated';
                 conversation.aiEnabled = false;
-                // conversation.conversationState = 'ESCALATED' // (Já foi definido pelo aiService)
 
-                // Gerar resumo da conversa para o atendente humano
                 let conversationSummary = '';
                 try {
                     conversationSummary = await aiService.summarizeConversation(conversation.messages, lead);
@@ -359,16 +332,14 @@ class WhatsAppAIController {
                     channel: channel,
                 });
 
-                // Adiciona o resumo como mensagem de sistema para o atendente
                 conversation.messages.push({
                     role: 'system',
                     content: `📋 RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
                     channel: channel,
                 });
 
-                conversationEnded = true; // --- GATILHO DE ESCRITA (ESCALAÇÃO) ---
+                conversationEnded = true; 
 
-                // Disparo de notificação OneSignal para o atendente
                 oneSignalService.sendPushNotification(
                   userId,
                   'Assistência Humana Solicitada',
@@ -377,19 +348,14 @@ class WhatsAppAIController {
                 );
             }
             
-            // A IA decidiu encerrar a conversa (sem agendar e sem escalar)?
             else if (aiResult.endCall === true) {
                 logger.info(`[AI Action] IA encerrou a conversa com lead ${lead._id}. Status: ${aiResult.leadStatus}`);
                 conversation.status = 'closed';
                 conversation.endedAt = new Date();
-                // O conversationState (ex: 'DISMISSED') já foi definido pela IA
-                conversationEnded = true; // --- GATILHO DE ESCRITA (DISPENSA) ---
+                conversationEnded = true; 
             }
         }
 
-        // ETAPA 4: Salvar e Enviar a resposta final
-        
-        // Salva a resposta da IA (se ela foi definida)
         if (aiResponse) {
             conversation.messages.push({ role: 'ai', content: aiResponse, channel });
             conversation.sentCount = (conversation.sentCount || 0) + 1;
@@ -397,14 +363,11 @@ class WhatsAppAIController {
             conversation.lastOutboundMessageAt = new Date();
         }
         
-        // Salva todas as atualizações (status, state, messages)
         await lead.save();
         await conversation.save();
         
-        // Dispara a análise se a conversa terminou
         if (conversationEnded) {
             logger.info(`[Auto-Treinamento] Conversa ${conversation._id} (WhatsApp) marcada para análise.`);
-            // Dispara em background (sem await) para não atrasar a resposta
             aiService._analyzeConversation(conversation, lead)
                 .then(analysis => {
                     if (analysis) {
@@ -416,22 +379,18 @@ class WhatsAppAIController {
                 });
         }
         
-        // Envia a mensagem (se houver uma)
-        if (aiResponse && !conversation.handedOffToHuman) { // Só envia se a IA ainda estiver ativa
+        if (aiResponse && !conversation.handedOffToHuman) { 
             const messagePayload = { type: 'text', content: aiResponse };
             if (user.settings?.aiConfig?.enableVoiceInteraction) {
                 messagePayload.type = 'audio';
                 messagePayload.buffer = await aiService.textToSpeech(aiResponse, user.settings.aiConfig.voiceModel);
             }
-            // Passa user.settings para o helper
             await this._sendMessageHelper(lead, messagePayload, instance, user.settings);
         
         } else if (aiResponse && conversation.handedOffToHuman) {
-            // Envia a última mensagem de handoff ("Estou transferindo...")
              await this._sendMessageHelper(lead, { type: 'text', content: aiResponse }, instance, user.settings);
         }
         
-        // Emite a atualização para a UI
         if (conversation.handedOffToHuman) {
             req.app.get('io').to(`user-${userId}`).emit('conversation_escalated', { conversation });
         } else {
@@ -445,11 +404,7 @@ class WhatsAppAIController {
 	        res.status(500).json({ message: 'Erro interno do servidor' });
     }
   }
-  // ==========================================================
-  // --- FIM DA FUNÇÃO AJUSTADA ---
-  // ==========================================================
 
-  // startMultipleConversationsWithTemplate (Mantido 100% - Sem alterações)
   startMultipleConversationsWithTemplate = async (req, res) => {
     try {
 	        const { leadIds, instanceId, templateId, mediaUrl, imageUrl, conversationOwnerType, teamMemberId } = req.body;
@@ -498,7 +453,7 @@ class WhatsAppAIController {
                 lead.lastContact = new Date();
                 await lead.save();
 
-                const components = buildTemplateComponents(template, lead, finalMediaUrl);
+                const components = buildTemplateComponents(template, lead, finalMediaUrl, req.user);
                 
                 await this._sendMessageHelper(lead, {
                     type: 'template',
@@ -515,7 +470,6 @@ class WhatsAppAIController {
             }
         }
 
-        // Notificação de lote
         if (successCount > 0) {
             oneSignalService.sendPushNotification(
                 userId,
@@ -538,7 +492,6 @@ class WhatsAppAIController {
     }
   }
 
-  // getWhatsAppProvider (Mantido 100% - Sem alterações)
   getWhatsAppProvider = async (req, res) => {
         try {
         if (!req.user) {
