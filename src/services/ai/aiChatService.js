@@ -60,11 +60,16 @@ class AiChatService {
       let debtContext = "Nenhuma dívida detalhada encontrada.";
       try {
         const Debt = this._getDebtModel();
-        const debts = await Debt.find({ lead: leadData._id });
-        if (debts && debts.length > 0) {
-          debtContext = debts.map(d => 
-            `- Contrato: ${d.contractNumber}, Valor Original: R$ ${d.originalAmount}, Saldo Atual: R$ ${d.currentBalance}, Status: ${d.status}`
-          ).join('\n');
+        if (leadData && leadData._id) {
+          const debts = await Debt.find({ lead: leadData._id });
+          if (debts && debts.length > 0) {
+            debtContext = debts.map(d => 
+              `- Contrato: ${d.contractNumber || 'S/N'}, Valor Original: R$ ${d.originalAmount || 0}, Saldo Atual: R$ ${d.currentBalance || 0}, Status: ${d.status || 'ativo'}`
+            ).join('\n');
+          } else if (leadData.value) {
+            // Fallback para o valor global do lead se não houver dívidas detalhadas
+            debtContext = `- Valor Total da Pendência: R$ ${leadData.value}`;
+          }
         }
       } catch (debtError) {
         logger.error('[AI Chat] Erro ao buscar dívidas:', debtError);

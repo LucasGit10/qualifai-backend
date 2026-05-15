@@ -28,7 +28,7 @@ const disableAiWithoutReply = (conversation, channel) => {
     conversation.aiEnabled = false;
     conversation.messages.push({
         role: 'system',
-        content: 'IA desativada automaticamente por indisponibilidade ao processar a mensagem.',
+        content: '⚠️ ATENÇÃO: A Inteligência Artificial foi desativada automaticamente para esta conversa devido a uma indisponibilidade técnica. Um atendente humano deve assumir o contato para garantir a continuidade do atendimento.',
         channel,
     });
 };
