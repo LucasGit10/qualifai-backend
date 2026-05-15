@@ -2,8 +2,8 @@ const Conversation = require('../../models/Conversation');
 const User = require('../../models/User');
 const Lead = require('../../models/Lead');
 const aiService = require('../../services/ai/aiChatService');
-const whatsappService = require('../../services/whatsapp/whatsappService');
-const oneSignalService = require('../../services/notification/oneSignalService');
+const whatsappService = require('../../services/whatsappService');
+const oneSignalService = require('../../services/oneSignalService');
 const logger = require('../../utils/logger');
 
 const isAiUnavailableResult = (result) =>
@@ -147,7 +147,11 @@ class AIController {
 
     async sendMessageToChannel(lead, messagePayload, channel, userSettings, instance) {
         if (channel === 'whatsapp') {
-            await whatsappService.sendMessage(instance, lead.phone, messagePayload.content);
+            try {
+                await whatsappService.sendMessage(instance, lead.phone, messagePayload.content);
+            } catch (err) {
+                logger.error('Erro ao enviar mensagem pelo whatsappService:', err);
+            }
         }
     }
 }
