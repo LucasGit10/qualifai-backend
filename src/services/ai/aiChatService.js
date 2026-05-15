@@ -7,8 +7,19 @@ const {
   mapConversationToChatMessages,
 } = require('./prompts/collection.prompts');
 const logger = require('../../utils/logger');
+const { getModel } = require('../../utils/modelProvider');
 
 class AiChatService {
+  constructor() {
+    this._Debt = null;
+  }
+
+  _getDebtModel() {
+    if (!this._Debt) {
+      this._Debt = getModel('Debt');
+    }
+    return this._Debt;
+  }
   /**
    * Gera resposta para o chat da landing page pública.
    * @param {Array} conversationHistory - Histórico de mensagens
@@ -39,17 +50,41 @@ class AiChatService {
   async generateResponse(conversation, leadData, userSettings) {
     try {
       const aiConfig = userSettings?.aiConfig || userSettings?.settings?.aiConfig || {};
+      
       // Injeta o nome da empresa do operador/credor no aiConfig para o prompt usar
       if (!aiConfig.companyName) {
         aiConfig.companyName = userSettings?.company?.name || userSettings?.settings?.company?.name || '';
       }
+
+      // Busca as dívidas do lead para dar contexto à IA
+      let debtContext = "Nenhuma dívida detalhada encontrada.";
+      try {
+        const Debt = this._getDebtModel();
+        const debts = await Debt.find({ lead: leadData._id });
+        if (debts && debts.length > 0) {
+          debtContext = debts.map(d => 
+            `- Contrato: ${d.contractNumber}, Valor Original: R$ ${d.originalAmount}, Saldo Atual: R$ ${d.currentBalance}, Status: ${d.status}`
+          ).join('\n');
+        }
+      } catch (debtError) {
+        logger.error('[AI Chat] Erro ao buscar dívidas:', debtError);
+      }
+
       const systemPrompt = buildCollectionSystemPrompt(aiConfig, leadData, conversation.channel);
 
       const messages = [
         { role: 'system', content: systemPrompt },
         {
           role: 'system',
-          content: `Devedor: Nome: ${leadData.name}, Empresa do Devedor: ${leadData.company || 'N/A'}, Status: ${leadData.status || 'novo'}`,
+          content: `### DADOS DO DEVEDOR PARA NEGOCIAÇÃO:
+Nome: ${leadData.name}
+Empresa: ${leadData.company || 'N/A'}
+Email: ${leadData.email || 'N/A'}
+Telefone: ${leadData.phone || 'N/A'}
+Status Atual: ${leadData.status || 'novo'}
+
+### DETALHAMENTO DAS DÍVIDAS:
+${debtContext}`,
         },
         ...conversation.messages.map(msg => ({
           role: msg.role === 'ai' ? 'assistant' : 'user',
