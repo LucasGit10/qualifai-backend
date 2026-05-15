@@ -93,12 +93,18 @@ ${debtContext}`,
       ];
 
       const raw = await chatCompletion(messages, {
-        max_tokens: 500,
+        max_tokens: 1000,
         temperature: 0.7,
         response_format: { type: 'json_object' },
       });
 
-      const parsed = JSON.parse(raw);
+      // Limpeza de blocos de código markdown se existirem
+      let cleanRaw = raw.trim();
+      if (cleanRaw.startsWith('```')) {
+        cleanRaw = cleanRaw.replace(/^```(json)?\n?/, '').replace(/\n?```$/, '').trim();
+      }
+
+      const parsed = JSON.parse(cleanRaw);
       logger.info('[AI Cobrança] Resposta:', parsed);
 
       if (!parsed.reply || !parsed.action) {
