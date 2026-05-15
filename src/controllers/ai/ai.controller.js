@@ -1,10 +1,10 @@
-import Conversation from '../../models/Conversation';
-import User from '../../models/User';
-import Lead from '../../models/Lead';
-import aiService from '../../services/ai/aiChatService';
-import whatsappService from '../../services/whatsapp/whatsappService';
-import oneSignalService from '../../services/notification/oneSignalService';
-import logger from '../../utils/logger';
+const Conversation = require('../../models/Conversation');
+const User = require('../../models/User');
+const Lead = require('../../models/Lead');
+const aiService = require('../../services/ai/aiChatService');
+const whatsappService = require('../../services/whatsapp/whatsappService');
+const oneSignalService = require('../../services/notification/oneSignalService');
+const logger = require('../../utils/logger');
 
 const isAiUnavailableResult = (result) =>
     result?.aiUnavailable === true || result?.action === 'disable_ai';
@@ -149,8 +149,7 @@ class AIController {
         if (channel === 'whatsapp') {
             await whatsappService.sendMessage(instance, lead.phone, messagePayload.content);
         }
-        // Outros canais aqui...
     }
 }
 
-export default new AIController();
+module.exports = new AIController();
