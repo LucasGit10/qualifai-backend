@@ -2,8 +2,8 @@ const axios = require('axios');
 const logger = require('../../utils/logger');
 
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_TEXT_MODEL = 'gemini-1.5-flash';
-const DEFAULT_TTS_MODEL = 'gemini-1.5-flash-8b';
+const DEFAULT_TEXT_MODEL = 'gemini-2.0-flash';
+const DEFAULT_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 
 const getApiKey = () => process.env.GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 const getTextModel = () => process.env.GEMINI_MODEL || DEFAULT_TEXT_MODEL;
