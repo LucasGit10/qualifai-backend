@@ -1,5 +1,5 @@
 // services/ai/aiLogicService.js
-// Serviço de lógica de classificação e decisão. Orquestra prompts + handler OpenAI.
+// Serviço de lógica de classificação e decisão. Orquestra prompts + handler Gemini.
 const { chatCompletion } = require('./handlers/chat.handler');
 const {
   buildClassificationPrompt,
@@ -16,7 +16,7 @@ class AiLogicService {
    * @returns {Promise<'quente'|'morno'|'frio'>}
    */
   async classifyLead(conversation, leadData, userSettings) {
-    const aiConfig = userSettings?.aiConfig || {};
+    const aiConfig = userSettings?.aiConfig || userSettings?.settings?.aiConfig || {};
     const fullPrompt = buildClassificationPrompt(
       aiConfig,
       leadData,

@@ -166,8 +166,21 @@ Exemplo de abordagem inicial:
       },
       salesMethodology: {
         type: String,
-        enum: ['Default', 'SPICED', 'SPIN', 'BANT', 'MEDDIC', 'QUALIFAI'],
-        default: 'Default'
+        enum: [
+          'acolhedor',
+          'equilibrado',
+          'resolutivo',
+          'amigavel',
+          'neutro',
+          'persistente',
+          'Default',
+          'SPICED',
+          'SPIN',
+          'BANT',
+          'MEDDIC',
+          'QUALIFAI'
+        ],
+        default: 'equilibrado'
       },
       enableAutonomousSwitching: {
         type: Boolean,

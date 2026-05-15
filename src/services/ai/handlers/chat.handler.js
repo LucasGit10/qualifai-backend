@@ -1,23 +1,19 @@
 // handlers/chat.handler.js
-// Wrapper direto da API de chat da OpenAI. Sem lógica de negócio aqui.
-const openai = require('../client');
-const logger = require('../../../utils/logger');
+// Wrapper direto da API de texto do Gemini. Sem logica de negocio aqui.
+const gemini = require('../geminiClient');
 
 /**
- * Executa uma chamada de chat completion na OpenAI.
+ * Executa uma chamada de geracao no Gemini mantendo a assinatura antiga.
  * @param {Array} messages - Array de mensagens no formato {role, content}
- * @param {object} options - Opções extras (max_tokens, temperature, response_format, etc.)
- * @returns {Promise<string>} Conteúdo da resposta (texto bruto)
+ * @param {object} options - Opcoes extras (max_tokens, temperature, response_format, etc.)
+ * @returns {Promise<string>} Conteudo da resposta (texto bruto)
  */
 async function chatCompletion(messages, options = {}) {
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages,
-    max_tokens: 150,
+  return gemini.chatCompletion(messages, {
+    max_tokens: 300,
     temperature: 0.7,
     ...options,
   });
-  return response.choices[0].message.content.trim();
 }
 
 module.exports = { chatCompletion };

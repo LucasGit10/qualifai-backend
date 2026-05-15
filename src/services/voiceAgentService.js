@@ -2,11 +2,11 @@
 // Utiliza vários serviços externos:
 // - Twilio: Para a chamada telefônica e streaming de áudio.
 // - Deepgram: Para transcrição em tempo real.
-// - OpenAI (ChatGPT): Para respostas de IA conversacional.
+// - Gemini: Para respostas de IA conversacional.
 // - ElevenLabs: Para text-to-speech realista via WSS.
 
 const { createClient } = require("@deepgram/sdk");
-const OpenAI = require('openai');
+const { chatCompletion } = require('./ai/handlers/chat.handler');
 const logger = require('../utils/logger');
 const WebSocket = require('ws'); // Para ElevenLabs WSS
 
@@ -21,8 +21,12 @@ const DEEPGRAM_LIVE_CONFIG = {
 };
 
 // --- INICIALIZAÇÃO DOS SERVIÇOS ---
-const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let deepgram = null;
+if (process.env.DEEPGRAM_API_KEY) {
+  deepgram = createClient(process.env.DEEPGRAM_API_KEY);
+} else {
+  logger.warn('[VoiceAgent] DEEPGRAM_API_KEY não configurada. O serviço de voz em tempo real ficará indisponível.');
+}
 
 class VoiceCallHandler {
   constructor(ws, io) {
@@ -39,7 +43,7 @@ class VoiceCallHandler {
   // Ponto de entrada principal para uma nova conexão
   async handleConnection() {
     this.setupWebSocketListeners();
-    this.setupOpenAI();
+    this.setupGemini();
   }
 
   // ==========================================================
@@ -119,7 +123,7 @@ class VoiceCallHandler {
     });
   }
 
-  setupOpenAI() {
+  setupGemini() {
     const systemPrompt = "Você é um agente de atendimento por telefone amigável e profissional da QualifAI. Seja conciso e natural. Seu objetivo é qualificar o lead e agendar uma demonstração.";
     this.conversationHistory = [{ role: 'system', content: systemPrompt }];
   }
@@ -130,19 +134,17 @@ class VoiceCallHandler {
     this.conversationHistory.push({ role: 'user', content: text });
 
     try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: this.conversationHistory,
+      const aiResponseText = await chatCompletion(this.conversationHistory, {
+        max_tokens: 180,
+        temperature: 0.7,
       });
-
-      const aiResponseText = completion.choices[0].message.content;
       
       if (aiResponseText) {
           this.conversationHistory.push({ role: 'assistant', content: aiResponseText });
           this.processAiResponse(aiResponseText);
       }
     } catch (error) {
-      logger.error('OpenAI API Error:', error);
+      logger.error('Gemini API Error:', error);
     }
   }
   

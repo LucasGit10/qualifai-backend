@@ -209,7 +209,7 @@ class VoiceAgentController {
       }
       const twilioConfig = conversation.user.settings.twilioConfig;
       if (RecordingUrl && RecordingDuration && parseInt(RecordingDuration, 10) > 0) {
-        logger.info(`[Whisper STT] Baixando áudio de: ${RecordingUrl}`);
+        logger.info(`[Gemini STT] Baixando áudio de: ${RecordingUrl}`);
         const response = await axios.get(RecordingUrl, { 
             responseType: 'arraybuffer',
             auth: {
@@ -224,9 +224,9 @@ class VoiceAgentController {
         } else {
           userSpeech = '[Incompreensível]';
         }
-        logger.info(`[Whisper STT] Transcrição: "${userSpeech}"`);
+        logger.info(`[Gemini STT] Transcrição: "${userSpeech}"`);
       } else {
-        logger.info('[Whisper STT] Nenhuma gravação detectada (silêncio).');
+        logger.info('[Gemini STT] Nenhuma gravação detectada (silêncio).');
         userSpeech = '[Silêncio]';
       }
       conversation.messages.push({ role: 'lead', content: userSpeech, channel: 'voice' });
@@ -274,7 +274,6 @@ class VoiceAgentController {
     }
   }
 
-
   // ==========================================================
   // --- 4. thinkAndRespond (MODIFICADO) ---
   // ==========================================================
@@ -294,7 +293,7 @@ class VoiceAgentController {
         endCall, 
         leadStatus, 
         escalate, 
-        proposeScheduling // <-- O Novo Sinal
+        proposeScheduling
       } = aiJson;
       
       const lead = conversation.lead;
@@ -313,6 +312,20 @@ class VoiceAgentController {
         
         if (escalate) {
           conversation.status = 'escalated';
+
+          // Gerar resumo da conversa para o atendente humano
+          try {
+            const conversationSummary = await aiService.summarizeConversation(conversation.messages, lead);
+            conversation.messages.push({
+              role: 'system',
+              content: `📋 RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
+              channel: 'voice',
+            });
+            logger.info(`[Handoff Voice] Resumo gerado para conversa ${conversation._id}`);
+          } catch (summaryError) {
+            logger.error('[Handoff Voice] Erro ao gerar resumo:', summaryError);
+          }
+
           await this._speakOrFallback(twiml, finalAiResponse || "Estou transferindo para um especialista.");
           twiml.hangup();
         } else { // endCall
@@ -326,7 +339,7 @@ class VoiceAgentController {
           twiml.hangup();
         }
 
-      // --- LÓGICA DE AGENDAMENTO (NOVO) ---
+      // --- LÓGICA DE AGENDAMENTO ---
       } else if (proposeScheduling) {
         logger.info(`[Scheduling] IA solicitou agendamento para ${lead._id}. Buscando horários...`);
         
@@ -345,7 +358,7 @@ class VoiceAgentController {
           status: 'proposed',
           proposedTimes: availableSlots,
         };
-        lead.status = 'morno'; // Ou 'qualificado', dependendo da sua regra
+        lead.status = 'morno';
         await lead.save();
 
         // 5. Ouve a resposta do lead (para os horários)
@@ -377,7 +390,7 @@ class VoiceAgentController {
       const twimlError = new VoiceResponse();
       twimlError.say("Desculpe, ocorreu um erro ao processar sua resposta. Poderia repetir?");
       const actionUrl = `${process.env.PUBLIC_URL}/api/voice-agent/handle-recording?conversationId=${conversationId}`;
-      twimlError.redirect({ method: 'GET' }, actionUrl); // GET para /twiml era o original, mas POST para /handle-recording é o novo padrão
+      twimlError.redirect({ method: 'GET' }, actionUrl);
       res.type('text/xml');
       res.status(500).send(twimlError.toString());
     }

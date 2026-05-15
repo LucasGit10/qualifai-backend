@@ -37,8 +37,8 @@
           "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/jwt-secret"
         },
         {
-          "name": "OPENAI_API_KEY",
-          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/openai-key"
+          "name": "GEMINI_API_KEY",
+          "valueFrom": "arn:aws:ssm:us-east-1:772316781052:parameter/qualifai/gemini-key"
         },
         {
           "name": "EVOLUTION_API_URL",

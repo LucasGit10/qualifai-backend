@@ -10,6 +10,9 @@ module.exports = {
   
   generatePerformanceSummary: aiContentService.generatePerformanceSummary.bind(aiContentService),
   generateCampaignTemplate: aiContentService.generateCampaignTemplate.bind(aiContentService),
+  summarizeConversation: aiContentService.summarizeConversation.bind(aiContentService),
+  generateFollowupMessage: aiContentService.generateFollowupMessage.bind(aiContentService),
+  analyzeDocumentForInsights: aiContentService.analyzeDocumentForInsights.bind(aiContentService),
 
   classifyLead: aiLogicService.classifyLead.bind(aiLogicService),
   detectHumanHandoffRequest: aiLogicService.detectHumanHandoffRequest.bind(aiLogicService),
@@ -22,4 +25,4 @@ module.exports = {
   generateSchedulingProposal: schedulingService.generateSchedulingProposal.bind(schedulingService),
   parseLeadSchedulingResponse: schedulingService.parseLeadSchedulingResponse.bind(schedulingService),
   createMeetingInCRMs: schedulingService.createMeetingInCRMs.bind(schedulingService),
-};
+};

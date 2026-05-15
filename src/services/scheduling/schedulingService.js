@@ -10,7 +10,7 @@ const pipedriveService = require('../pipedriveService');
 const zohoService = require('../zohoService'); 
 const kommoService = require('../kommoService'); 
 
-const openai = require('../ai/openAIClient');
+const { chatCompletion } = require('../ai/handlers/chat.handler');
 
 class SchedulingService {
 
@@ -125,22 +125,21 @@ class SchedulingService {
     const userPrompt = `### Histórico da Conversa:\n${history}\n\n### Última Resposta do Lead:\n"${leadMessage}"\n\n### JSON de Análise:`;
     
     try {
-        const response = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [
+        const raw = await chatCompletion(
+            [
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt }
             ],
-            response_format: { type: "json_object" },
-        });
+            { response_format: { type: "json_object" }, temperature: 0 }
+        );
 
-        const parsedJson = JSON.parse(response.choices[0].message.content);
+        const parsedJson = JSON.parse(raw);
         logger.info(`[Scheduling Parse] Input: "${leadMessage}", Output:`, parsedJson);
         
         if (parsedJson.status === 'CONFIRMED' && parsedJson.dateTime) {
             const confirmedDate = new Date(parsedJson.dateTime);
             if (isNaN(confirmedDate.getTime())) {
-                logger.warn(`[Scheduling Parse] OpenAI retornou uma data inválida: ${parsedJson.dateTime}. Revertendo para UNCLEAR.`);
+                logger.warn(`[Scheduling Parse] Gemini retornou uma data invalida: ${parsedJson.dateTime}. Revertendo para UNCLEAR.`);
                 return { status: "UNCLEAR", dateTime: null };
             }
         }
@@ -148,7 +147,7 @@ class SchedulingService {
         return parsedJson;
 
     } catch (error) {
-        logger.error('Erro ao analisar a resposta de agendamento (OpenAI):', error);
+        logger.error('Erro ao analisar a resposta de agendamento (Gemini):', error);
         return { status: "UNCLEAR", dateTime: null };
     }
   }

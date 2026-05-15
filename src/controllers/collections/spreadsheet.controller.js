@@ -20,6 +20,7 @@ const { getModel } = require('../../utils/modelProvider');
 const logger = require('../../utils/logger');
 
 const Lead = getModel('Lead');
+const User = getModel('User');
 const SpcRecord = getModel('SpcRecord');
 const ContasReceber = getModel('ContasReceber');
 const InadimplenciaDetalhe = getModel('InadimplenciaDetalhe');
@@ -41,6 +42,9 @@ const detectSeparator = (filePath) => new Promise((resolve) => {
 
 /** Lê registros de um arquivo (CSV ou Excel) */
 const normalizeKey = (k) => String(k || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s/g, '');
+const normalizeOption = (value, maxLength = 80) => (
+  typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').slice(0, maxLength) : ''
+);
 
 const findSpreadsheetHeaderIndex = (rows) => rows.findIndex((row) => {
   const normalized = (row || []).map(normalizeKey).filter(Boolean);
@@ -951,6 +955,32 @@ class SpreadsheetController {
     }
   }
 
+  async updateDebtorStatus(req, res) {
+    try {
+      const userId = req.user.id;
+      const { leadId } = req.params;
+      const status = normalizeOption(req.body.status) || 'novo';
+
+      const lead = await Lead.findOneAndUpdate(
+        { _id: leadId, user: userId },
+        { $set: { status } },
+        { new: true, runValidators: false }
+      ).select('_id status');
+
+      if (!lead) return res.status(404).json({ message: 'Devedor nao encontrado.' });
+
+      await User.updateOne(
+        { _id: userId },
+        { $addToSet: { 'settings.debtorStatuses': status } }
+      );
+
+      res.json({ success: true, lead });
+    } catch (e) {
+      logger.error('[updateDebtorStatus] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
+
   async addDebtorNote(req, res) {
     try {
       const userId = req.user.id;
@@ -1159,15 +1189,14 @@ class SpreadsheetController {
         };
 
         doc.fillColor('#000000').fontSize(13).font('Helvetica-Bold').text('Listagem para impressao - um devedor por linha');
-        doc.fillColor(secondaryColor).fontSize(9).font('Helvetica').text('Inclui status manual e tags do devedor.');
+        doc.fillColor(secondaryColor).fontSize(9).font('Helvetica').text('Inclui o status atual do devedor.');
         doc.moveDown(1);
 
         const columns = [
           { title: 'Nome', x: 50, width: 135 },
           { title: 'Telefone', x: 185, width: 82 },
-          { title: 'Status', x: 267, width: 112 },
-          { title: 'Tags', x: 379, width: 95 },
-          { title: 'Total', x: 474, width: 75 }
+          { title: 'Status', x: 267, width: 165 },
+          { title: 'Total', x: 432, width: 117 }
         ];
         const drawHeader = () => {
           const y = doc.y;
@@ -1184,15 +1213,13 @@ class SpreadsheetController {
           }
           const y = doc.y;
           if (index % 2 === 0) doc.rect(45, y - 2, 510, 18).fill('#f8fafc');
-          const reportStatus = d.leadInfo?.manualReportStatus || d.leadInfo?.status || '-';
-          const tags = Array.isArray(d.leadInfo?.tags) && d.leadInfo.tags.length ? d.leadInfo.tags.join(', ') : '-';
+          const reportStatus = d.leadInfo?.status || '-';
           const phone = d.telefone1 || d.telefone2 || d.leadInfo?.phone;
           const total = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.totalGeral || 0);
           doc.fillColor('#111827').fontSize(8).font('Helvetica').text(d.cliente || '-', columns[0].x, y, { width: columns[0].width, ellipsis: true });
           doc.text(fmtPhone(phone), columns[1].x, y, { width: columns[1].width });
           doc.text(reportStatus, columns[2].x, y, { width: columns[2].width, ellipsis: true });
-          doc.text(tags, columns[3].x, y, { width: columns[3].width, ellipsis: true });
-          doc.text(total, columns[4].x, y, { width: columns[4].width, align: 'right' });
+          doc.text(total, columns[3].x, y, { width: columns[3].width, align: 'right' });
           doc.y = y + 18;
         });
 
@@ -1209,8 +1236,6 @@ class SpreadsheetController {
         doc.font('Helvetica-Bold').text(`CPF/CNPJ: `, { continued: true }).font('Helvetica').text(d.cpfCnpj || 'â€”');
         doc.font('Helvetica-Bold').text(`Empreendimento: `, { continued: true }).font('Helvetica').text(d.empreendimento || 'â€”');
         doc.font('Helvetica-Bold').text(`Status Atual: `, { continued: true }).font('Helvetica').text((d.leadInfo?.status || 'novo').toUpperCase());
-        doc.font('Helvetica-Bold').text(`Status Manual: `, { continued: true }).font('Helvetica').text(d.leadInfo?.manualReportStatus || '---');
-        doc.font('Helvetica-Bold').text(`Tags: `, { continued: true }).font('Helvetica').text(Array.isArray(d.leadInfo?.tags) && d.leadInfo.tags.length ? d.leadInfo.tags.join(', ') : '---');
         doc.font('Helvetica-Bold').text(`Movimento Importacao: `, { continued: true }).font('Helvetica').text(formatImportStatus(d.importStatus));
         doc.moveDown(0.5);
 

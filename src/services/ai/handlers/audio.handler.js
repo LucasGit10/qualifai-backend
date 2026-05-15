@@ -1,46 +1,80 @@
 // handlers/audio.handler.js
-// Wrapper da API de áudio da OpenAI (TTS e STT). Sem lógica de negócio.
-const openai = require('../client');
-const logger = require('../../../utils/logger');
+// Wrapper de audio do Gemini (TTS + STT). Sem logica de negocio.
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+const gemini = require('../geminiClient');
+const logger = require('../../../utils/logger');
 
-/**
- * Converte texto em áudio usando OpenAI TTS.
- * @param {string} text - Texto a ser convertido
- * @param {string} voice - Voz a usar ('nova', 'alloy', etc.)
- * @returns {Promise<Buffer>} Buffer de áudio em formato opus
- */
-async function textToSpeech(text, voice = 'nova') {
-  const response = await openai.audio.speech.create({
-    model: 'tts-1',
-    voice,
-    input: text,
-    response_format: 'opus',
-  });
-  return Buffer.from(await response.arrayBuffer());
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+const VOICE_MAP = {
+  alloy: 'Kore',
+  echo: 'Puck',
+  fable: 'Aoede',
+  onyx: 'Charon',
+  nova: 'Kore',
+  shimmer: 'Leda',
+};
+
+function parsePcmRate(mimeType = '') {
+  const match = String(mimeType).match(/rate=(\d+)/i);
+  return match ? Number(match[1]) : 24000;
+}
+
+async function convertPcmToOggOpus(pcmBuffer, sampleRate = 24000) {
+  const basePath = path.join(os.tmpdir(), `qualifai-gemini-audio-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const pcmPath = `${basePath}.pcm`;
+  const oggPath = `${basePath}.ogg`;
+
+  try {
+    await fs.writeFile(pcmPath, pcmBuffer);
+    await new Promise((resolve, reject) => {
+      ffmpeg(pcmPath)
+        .inputFormat('s16le')
+        .audioFrequency(sampleRate)
+        .audioChannels(1)
+        .audioCodec('libopus')
+        .format('ogg')
+        .on('end', resolve)
+        .on('error', reject)
+        .save(oggPath);
+    });
+    return await fs.readFile(oggPath);
+  } finally {
+    await Promise.all([
+      fs.unlink(pcmPath).catch(() => {}),
+      fs.unlink(oggPath).catch(() => {}),
+    ]);
+  }
 }
 
 /**
- * Transcreve áudio em texto usando OpenAI Whisper.
- * @param {Buffer} audioBuffer - Buffer de áudio
+ * Converte texto em audio usando Gemini TTS.
+ * @param {string} text - Texto a ser convertido
+ * @param {string} voice - Voz legada configurada no produto
+ * @returns {Promise<Buffer>} Buffer de audio em OGG/Opus
+ */
+async function textToSpeech(text, voice = 'nova') {
+  const geminiVoice = VOICE_MAP[voice] || voice || 'Kore';
+  const { buffer, mimeType } = await gemini.textToSpeechPcm(text, geminiVoice);
+  return convertPcmToOggOpus(buffer, parsePcmRate(mimeType));
+}
+
+/**
+ * Transcreve audio em texto usando Gemini multimodal.
+ * @param {Buffer} audioBuffer - Buffer de audio
+ * @param {string} mimeType - MIME do audio recebido
  * @returns {Promise<string>} Texto transcrito
  */
-async function speechToText(audioBuffer) {
-  const tempFilePath = path.join(os.tmpdir(), `qualifai-audio-${Date.now()}.mp3`);
-  try {
-    await fs.writeFile(tempFilePath, audioBuffer);
-    const transcription = await openai.audio.transcriptions.create({
-      file: require('fs').createReadStream(tempFilePath),
-      model: 'whisper-1',
-    });
-    return transcription.text;
-  } finally {
-    await fs.unlink(tempFilePath).catch(err =>
-      logger.warn(`Failed to delete temp audio file: ${err.message}`)
-    );
+async function speechToText(audioBuffer, mimeType = 'audio/ogg') {
+  const transcription = await gemini.transcribeAudio(audioBuffer, mimeType);
+  if (!transcription) {
+    logger.warn('Gemini STT retornou transcricao vazia.');
   }
+  return transcription;
 }
 
 module.exports = { textToSpeech, speechToText };

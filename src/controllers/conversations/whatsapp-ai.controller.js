@@ -342,11 +342,30 @@ class WhatsAppAIController {
                 conversation.status = 'escalated';
                 conversation.aiEnabled = false;
                 // conversation.conversationState = 'ESCALATED' // (Já foi definido pelo aiService)
+
+                // Gerar resumo da conversa para o atendente humano
+                let conversationSummary = '';
+                try {
+                    conversationSummary = await aiService.summarizeConversation(conversation.messages, lead);
+                    logger.info(`[Handoff WhatsApp] Resumo gerado para conversa ${conversation._id}`);
+                } catch (summaryError) {
+                    logger.error('[Handoff WhatsApp] Erro ao gerar resumo:', summaryError);
+                    conversationSummary = 'Não foi possível gerar o resumo automático.';
+                }
+
                 conversation.messages.push({
                     role: 'system',
                     content: 'O lead solicitou falar com um especialista. A IA foi desativada.',
                     channel: channel,
                 });
+
+                // Adiciona o resumo como mensagem de sistema para o atendente
+                conversation.messages.push({
+                    role: 'system',
+                    content: `📋 RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
+                    channel: channel,
+                });
+
                 conversationEnded = true; // --- GATILHO DE ESCRITA (ESCALAÇÃO) ---
 
                 // Disparo de notificação OneSignal para o atendente

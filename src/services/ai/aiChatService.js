@@ -1,10 +1,10 @@
 // services/ai/aiChatService.js
-// Serviço de chat de cobrança. Orquestra prompts + handler OpenAI.
+// Serviço de chat de cobrança. Orquestra prompts + handler Gemini.
 const { chatCompletion } = require('./handlers/chat.handler');
 const {
   buildCollectionSystemPrompt,
   buildLandingPagePrompt,
-  mapConversationToOpenAI,
+  mapConversationToChatMessages,
 } = require('./prompts/collection.prompts');
 const logger = require('../../utils/logger');
 
@@ -20,7 +20,7 @@ class AiChatService {
       const systemPrompt = buildLandingPagePrompt(customPrompt);
       const messages = [
         { role: 'system', content: systemPrompt },
-        ...mapConversationToOpenAI(conversationHistory),
+        ...mapConversationToChatMessages(conversationHistory),
       ];
       return await chatCompletion(messages, { max_tokens: 150, temperature: 0.7 });
     } catch (error) {
@@ -38,14 +38,14 @@ class AiChatService {
    */
   async generateResponse(conversation, leadData, userSettings) {
     try {
-      const aiConfig = userSettings?.aiConfig || {};
-      const systemPrompt = buildCollectionSystemPrompt(aiConfig, leadData);
+      const aiConfig = userSettings?.aiConfig || userSettings?.settings?.aiConfig || {};
+      const systemPrompt = buildCollectionSystemPrompt(aiConfig, leadData, conversation.channel);
 
       const messages = [
         { role: 'system', content: systemPrompt },
         {
           role: 'system',
-          content: `Devedor: Nome: ${leadData.name}, Empresa/Credor: ${leadData.company}, Status: ${leadData.status || 'novo'}`,
+          content: `Cliente: Nome: ${leadData.name}, Empresa/Credor: ${leadData.company}, Status: ${leadData.status || 'novo'}`,
         },
         ...conversation.messages.map(msg => ({
           role: msg.role === 'ai' ? 'assistant' : 'user',

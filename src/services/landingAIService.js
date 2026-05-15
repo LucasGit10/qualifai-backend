@@ -1,15 +1,11 @@
-const OpenAI = require('openai');
 const { aiConfig, company } = require('../config/aiConfigs/promptConfig');
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const { chatCompletion } = require('./ai/handlers/chat.handler');
 
 function buildSystemPrompt() {
   return `
-Você está conversando como ${aiConfig.agentName}, um atendente virtual da ${company.name}, uma empresa de ${aiConfig.companyIndustry}.
+Voce esta conversando como ${aiConfig.agentName}, um atendente virtual da ${company.name}, uma empresa de ${aiConfig.companyIndustry}.
 
-Estilo de comunicação: ${aiConfig.communicationStyle}
+Estilo de comunicacao: ${aiConfig.communicationStyle}
 Idioma: ${aiConfig.language}
 
 ${aiConfig.prompt}
@@ -31,14 +27,10 @@ async function getLandingChatResponse(userInput, conversation = []) {
 
   messages.push({ role: 'user', content: userInput });
 
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: messages,
+  return chatCompletion(messages, {
     temperature: 0.7,
     max_tokens: 1000,
   });
-
-  return response.choices[0].message.content;
 }
 
 module.exports = {

@@ -6,13 +6,12 @@ const logger = require('../../utils/logger');
 const { getModel } = require('../../utils/modelProvider');
 const User = getModel('User');
 const Lead = getModel('Lead');
+const SyntheticConversation = getModel('SyntheticConversation');
+const ConversationInsight = getModel('ConversationInsight');
+const aiSimulationService = require('../../services/ai/aiSimulationService');
 
 const fs = require('fs/promises'); 
 
-// *** DEPENDÊNCIAS DE ARQUIVO (Você deve instalá-las!) ***
-// const pdf = require('pdf-parse'); 
-// const mammoth = require('mammoth'); 
-// *******************************************************
 
 
 // ==========================================================
@@ -99,17 +98,21 @@ exports.handleDocumentUpload = async (req, res, next) => {
     if (mimetype === 'text/plain') {
       documentText = await fs.readFile(filePath, 'utf-8');
     } else if (mimetype === 'application/pdf') {
-      // documentText = (await pdf(await fs.readFile(filePath))).text; // Lógica real
-      // --- PLACEHOLDER DE CÓDIGO FUNCIONAL ---
-      documentText = `Simulação de texto de PDF. O lead falou que o maior problema era o custo.`; 
-      logger.warn('Usando lógica placeholder para PDF. Instale pdf-parse para usar o código real.');
-      // ------------------------------------
+      try {
+        const pdf = require('pdf-parse');
+        documentText = (await pdf(await fs.readFile(filePath))).text;
+      } catch (pdfError) {
+        logger.warn('pdf-parse não disponível. Lendo como texto bruto.');
+        documentText = await fs.readFile(filePath, 'utf-8');
+      }
     } else if (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      // documentText = (await mammoth.extractRawText({ path: filePath })).value; // Lógica real
-      // --- PLACEHOLDER DE CÓDIGO FUNCIONAL ---
-      documentText = `Simulação de texto de DOCX. O gerente quer saber sobre a integração com o HubSpot.`; 
-      logger.warn('Usando lógica placeholder para DOCX. Instale mammoth para usar o código real.');
-      // ------------------------------------
+      try {
+        const mammoth = require('mammoth');
+        documentText = (await mammoth.extractRawText({ path: filePath })).value;
+      } catch (docxError) {
+        logger.warn('mammoth não disponível. Lendo como texto bruto.');
+        documentText = await fs.readFile(filePath, 'utf-8');
+      }
     } else {
       throw new Error('Tipo de arquivo não suportado para análise. Suporta: .txt, .pdf, .docx.');
     }
@@ -118,25 +121,34 @@ exports.handleDocumentUpload = async (req, res, next) => {
         throw new Error('O texto extraído é muito curto ou vazio para ser analisado pela IA.');
     }
 
-    // 2. Análise do Texto (Criação do Insight)
-    // NOTA: As funções 'analyzeRawTextForInsights' e 'vectorizeAndStoreRawInsight'
-    // não existem no seu aiService.js atual.
-    
-    // const analysisData = await aiService.analyzeRawTextForInsights(documentText, userId);
-    
-    // if (analysisData && analysisData.key_insights && analysisData.key_insights.length > 0) {
-    //   // 3. Vetorização e Armazenamento (Aprendizado RAG)
-    //   await aiService.vectorizeAndStoreRawInsight(analysisData, userId);
-    //   insightsAdded = analysisData.key_insights.length;
-    // }
-    
-    logger.warn("Função 'analyzeRawTextForInsights' não implementada no aiService. Pulando análise de documento.");
-    insightsAdded = 0; // Placeholder
+    // 2. Análise do Texto com IA (Gemini)
+    const analysisResult = await aiService.analyzeDocumentForInsights(documentText, originalname);
+
+    // 3. Armazenamento dos insights no banco
+    if (analysisResult && analysisResult.keyInsights && analysisResult.keyInsights.length > 0) {
+      const insight = new ConversationInsight({
+        user: userId,
+        type: 'document',
+        success: true,
+        summary: analysisResult.summary || `Análise do documento: ${originalname}`,
+        keyPoints: analysisResult.keyInsights,
+        effectiveStrategies: analysisResult.actionableAdvice || [],
+        tags: analysisResult.tags || [],
+        source: 'document_upload',
+        rawData: { fileName: originalname, textLength: documentText.length },
+      });
+      await insight.save();
+      insightsAdded = analysisResult.keyInsights.length;
+      logger.info(`[Upload Insight] ${insightsAdded} insights extraídos do documento "${originalname}" para o usuário ${userId}.`);
+    }
 
     res.json({
       fileName: originalname,
       insightsAdded: insightsAdded,
-      message: 'Documento processado. (Análise de Insights pulada - função não implementada).'
+      summary: analysisResult?.summary || '',
+      insights: analysisResult?.keyInsights || [],
+      tags: analysisResult?.tags || [],
+      message: `Documento processado com sucesso. ${insightsAdded} insight(s) extraído(s).`
     });
 
   } catch (error) {

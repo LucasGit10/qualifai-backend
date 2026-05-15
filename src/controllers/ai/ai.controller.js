@@ -213,9 +213,26 @@ class AIController {
             conversation.status = 'escalated';
             conversation.aiEnabled = false;
 
+            // Gerar resumo da conversa para o atendente humano
+            let conversationSummary = '';
+            try {
+                conversationSummary = await aiService.summarizeConversation(conversation.messages, lead);
+                logger.info(`[Handoff] Resumo gerado para conversa ${conversation._id}`);
+            } catch (summaryError) {
+                logger.error('[Handoff] Erro ao gerar resumo:', summaryError);
+                conversationSummary = 'Não foi possível gerar o resumo automático.';
+            }
+
             conversation.messages.push({
                 role: 'system',
                 content: 'O lead solicitou falar com um especialista. A IA foi desativada.',
+                channel: conversation.channel,
+            });
+
+            // Adiciona o resumo como mensagem de sistema para o atendente
+            conversation.messages.push({
+                role: 'system',
+                content: `📋 RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
                 channel: conversation.channel,
             });
 
@@ -236,7 +253,7 @@ class AIController {
             
             req.app.get('io').to(`user-${userId}`).emit('conversation_escalated', { conversation });
 
-            return res.json({ success: true, conversation, aiResponse: finalAiResponse });
+            return res.json({ success: true, conversation, aiResponse: finalAiResponse, conversationSummary });
         }
 
 
@@ -393,28 +410,45 @@ class AIController {
       const { conversationId } = req.body;
       const userId = req.user.id;
 
-      const conversation = await Conversation.findOneAndUpdate(
-        { _id: conversationId, user: userId },
-        { 
-          handedOffToHuman: true, 
-          handedOffAt: new Date(),
-          status: 'escalated',
-          aiEnabled: false,
-          $push: { messages: { role: 'system', content: 'A conversa foi escalada para um especialista manualmente.', channel: 'chat' } }
-        },
-        { new: true }
-      ).populate('lead');
-
+      // Primeiro busca a conversa para gerar o resumo antes de atualizar
+      const conversation = await Conversation.findOne({ _id: conversationId, user: userId }).populate('lead');
       if (!conversation) {
         return res.status(404).json({ message: 'Conversa não encontrada' });
       }
 
+      // Gerar resumo da conversa para o atendente humano
+      let conversationSummary = '';
+      try {
+        conversationSummary = await aiService.summarizeConversation(conversation.messages, conversation.lead);
+        logger.info(`[Handoff Manual] Resumo gerado para conversa ${conversation._id}`);
+      } catch (summaryError) {
+        logger.error('[Handoff Manual] Erro ao gerar resumo:', summaryError);
+        conversationSummary = 'Não foi possível gerar o resumo automático.';
+      }
+
+      // Atualiza a conversa com o status de escalação e o resumo
+      conversation.handedOffToHuman = true;
+      conversation.handedOffAt = new Date();
+      conversation.status = 'escalated';
+      conversation.aiEnabled = false;
+      conversation.messages.push({
+        role: 'system',
+        content: 'A conversa foi escalada para um especialista manualmente.',
+        channel: conversation.channel || 'chat',
+      });
+      conversation.messages.push({
+        role: 'system',
+        content: `📋 RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
+        channel: conversation.channel || 'chat',
+      });
+      await conversation.save();
+
       const user = await User.findById(userId);
-      if(user.settings.integrations?.hubspot?.enabled) await hubspotService.createHubSpotTask(conversation.lead, userId, user.settings);
+      if(user.settings?.integrations?.hubspot?.enabled) await hubspotService.createHubSpotTask(conversation.lead, userId, user.settings);
       
       req.app.get('io').to(`user-${userId}`).emit('conversation_escalated', { conversation });
 
-      res.json({ success: true, conversation });
+      res.json({ success: true, conversation, conversationSummary });
     } catch (error) {
       logger.error('Erro ao escalar para humano:', error);
       res.status(500).json({ message: 'Erro interno do servidor' });
@@ -592,7 +626,7 @@ class AIController {
         return res.status(400).json({ message: 'A voz é obrigatória.' });
       }
       const audioBuffer = await aiService.generateSpeechSample(voice);
-      res.set('Content-Type', 'audio/opus');
+      res.set('Content-Type', 'audio/ogg');
       res.send(audioBuffer);
     } catch (error) {
       res.status(500).json({ message: 'Erro ao gerar amostra de áudio.' });
