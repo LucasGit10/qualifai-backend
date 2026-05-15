@@ -54,7 +54,7 @@ class AiChatService {
       ];
 
       const raw = await chatCompletion(messages, {
-        max_tokens: 150,
+        max_tokens: 500,
         temperature: 0.7,
         response_format: { type: 'json_object' },
       });
