@@ -310,7 +310,7 @@ class WhatsAppAIController {
                 conversation.conversationState = aiResult.conversationState;
             }
 
-            if (aiResult.escalate === true) {
+            if (aiResult.escalate === true || aiResult.action === 'request_human') {
                 logger.info(`[Handoff] Lead ${lead._id} solicitou especialista no WhatsApp. Escalando...`);
                 conversation.handedOffToHuman = true;
                 conversation.handedOffAt = new Date();
@@ -340,12 +340,17 @@ class WhatsAppAIController {
 
                 conversationEnded = true; 
 
-                oneSignalService.sendPushNotification(
-                  userId,
-                  'Assistência Humana Solicitada',
-                  `O lead ${lead.name || lead.phone} solicitou falar com um humano.`,
-                  { type: 'whatsapp', link: `/app/conversations-whats?id=${conversation._id}` }
-                );
+                // Notificação via OneSignal
+                try {
+                    await oneSignalService.sendPushNotification(
+                        userId,
+                        'Assistência Humana Solicitada',
+                        `O lead ${lead.name || lead.phone} solicitou falar com um humano.`,
+                        { type: 'whatsapp', link: `/app/conversations-whats?id=${conversation._id}` }
+                    );
+                } catch (pushError) {
+                    logger.error('Erro ao enviar notificação OneSignal:', pushError);
+                }
             }
             
             else if (aiResult.endCall === true) {

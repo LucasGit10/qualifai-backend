@@ -338,6 +338,35 @@ class AIController {
             }
             aiResponse = getAiReply(aiResult);
             
+            // Verificação de solicitação de humano pela própria IA
+            if (aiResult.action === 'request_human') {
+                logger.info(`[Handoff AI] A própria IA solicitou escalação para o lead ${lead._id}`);
+                
+                conversation.handedOffToHuman = true;
+                conversation.handedOffAt = new Date();
+                conversation.status = 'escalated';
+                conversation.aiEnabled = false;
+
+                let conversationSummary = '';
+                try {
+                    conversationSummary = await aiService.summarizeConversation(conversation.messages, lead);
+                } catch (summaryError) {
+                    conversationSummary = 'Não foi possível gerar o resumo automático.';
+                }
+
+                conversation.messages.push({
+                    role: 'system',
+                    content: 'A IA identificou a necessidade de atendimento humano e foi desativada.',
+                    channel: conversation.channel,
+                });
+
+                conversation.messages.push({
+                    role: 'system',
+                    content: `📋 RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
+                    channel: conversation.channel,
+                });
+            }
+            
             if (['novo', 'contatado', 'morno', 'frio'].includes(lead.status)) {
                 const classification = await aiService.classifyLead(conversation, lead, user.settings);
                 

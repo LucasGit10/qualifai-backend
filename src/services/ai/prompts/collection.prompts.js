@@ -86,6 +86,7 @@ Responda SEMPRE com JSON válido e nada além do JSON:
 *AÇÕES DISPONÍVEIS:*
 - "continue_conversation": Para continuar a conversa, acolher o cliente ou apresentar alternativas.
 - "propose_agreement": Quando o cliente aceitar uma proposta de pagamento ou acordo.
+- "request_human": Quando o cliente solicitar falar com um atendente humano, especialista, ou aceitar uma indicação sua de que um especialista entrará em contato. Use esta ação para encerrar a participação da IA e passar para o humano.
 - "end_conversation": Se o cliente recusar qualquer negociação, pedir para encerrar, não for o titular/responsável, ou o contexto exigir encerrar com respeito.
 `;
 

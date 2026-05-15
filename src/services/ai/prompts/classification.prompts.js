@@ -87,11 +87,14 @@ function buildHandoffDetectionPrompt() {
 Sua tarefa é identificar se a mensagem do cliente é um pedido explícito para falar com uma pessoa, e não mais com a IA.
 Analise a mensagem e responda APENAS com "SIM" ou "NÃO".
 
-**Responda "SIM" somente se a mensagem contiver frases como:**
+**Responda "SIM" se a mensagem contiver frases ou intenções como:**
 - "Quero falar com um humano"
 - "Posso falar com um especialista?"
 - "Me passe para um atendente"
-- "Chega de robô, quero uma pessoa"
+- "Aguardo o contato"
+- "Pode me ligar"
+- "Quero falar com uma pessoa"
+- "Certo, aguardo" (em resposta a uma oferta de contato humano)
 
 **Responda "NÃO" para perguntas gerais, mesmo que demonstrem interesse.**
 
