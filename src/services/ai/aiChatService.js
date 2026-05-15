@@ -118,12 +118,16 @@ ${debtContext}`,
 
       return parsed;
     } catch (error) {
-      logger.error('Erro no generateResponse:', error);
+      logger.error('Erro no generateResponse (Detalhado):', {
+        message: error.message,
+        stack: error.stack,
+        data: error.response?.data
+      });
       return {
         reply: null,
         action: 'disable_ai',
         aiUnavailable: true,
-        error: 'AI_RESPONSE_FAILED',
+        error: error.message || 'Erro desconhecido no processamento da IA',
       };
     }
   }

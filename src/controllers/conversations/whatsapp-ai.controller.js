@@ -13,11 +13,11 @@ const logger = require('../../utils/logger');
 const isAiUnavailableResult = (result) =>
   result?.aiUnavailable === true || result?.action === 'disable_ai';
 
-const disableAiWithoutReply = (conversation, channel) => {
+const disableAiWithoutReply = (conversation, channel, errorDetail) => {
     conversation.aiEnabled = false;
     conversation.messages.push({
         role: 'system',
-        content: '⚠️ ATENÇÃO: A Inteligência Artificial foi desativada automaticamente para esta conversa devido a uma indisponibilidade técnica. Um atendente humano deve assumir o contato para garantir a continuidade do atendimento.',
+        content: `⚠️ FALHA TÉCNICA NA IA: ${errorDetail || 'Erro interno no processamento'}. A automação foi desativada por segurança.`,
         channel,
     });
 };
@@ -289,16 +289,11 @@ class WhatsAppAIController {
         
         if (aiResult) {
             if (isAiUnavailableResult(aiResult)) {
-                logger.warn('[AI Action] IA indisponivel. Desativando conversa sem enviar resposta ao lead.', {
-                    conversationId: conversation._id,
-                    leadId: lead._id,
-                    action: aiResult.action,
-                    error: aiResult.error,
-                });
-                disableAiWithoutReply(conversation, channel);
+                logger.error('[AI WhatsApp] Erro crítico na IA:', aiResult.error);
+                disableAiWithoutReply(conversation, channel, aiResult.error);
                 await conversation.save();
                 req.app.get('io').to(`user-${userId}`).emit('conversation_updated', { conversation });
-                return res.json({ success: true, conversation, aiResponse: null, message: 'IA desativada automaticamente.' });
+                return res.json({ success: true, conversation, aiResponse: null, message: 'IA desativada por erro técnico.' });
             }
 
             aiResponse = aiResult.reply;
