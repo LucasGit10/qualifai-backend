@@ -81,13 +81,27 @@ Busque uma solução conjunta para regularizar a pendência sem constranger, pre
 
 *FORMATO DE SAÍDA OBRIGATÓRIO:*
 Responda SEMPRE com JSON válido e nada além do JSON:
-{ "reply": "mensagem para enviar ao cliente", "action": "ação" }
+{
+  "reply": "mensagem para enviar ao cliente",
+  "action": "ação",
+  "leadStatus": "novo|contatado|morno|frio|em_negociacao|qualificado|convertido",
+  "conversationState": "DISCOVERY|NEGOTIATION|SCHEDULING|CONVERTED|DISMISSED",
+  "escalate": false,
+  "endCall": false,
+  "proposeScheduling": false
+}
 
 *AÇÕES DISPONÍVEIS:*
 - "continue_conversation": Para continuar a conversa, acolher o cliente ou apresentar alternativas.
 - "propose_agreement": Quando o cliente aceitar uma proposta de pagamento ou acordo.
 - "request_human": Quando o cliente solicitar falar com um atendente humano, especialista, ou aceitar uma indicação sua de que um especialista entrará em contato. Use esta ação para encerrar a participação da IA e passar para o humano.
 - "end_conversation": Se o cliente recusar qualquer negociação, pedir para encerrar, não for o titular/responsável, ou o contexto exigir encerrar com respeito.
+
+*REGRAS PARA CAMPOS DE CONTROLE:*
+- Use "escalate": true quando a ação for "request_human" ou houver risco sensível que exija atendente.
+- Use "endCall": true quando a ação for "end_conversation".
+- Use "proposeScheduling": true somente se o cliente demonstrar abertura clara para uma conversa com especialista/agendamento.
+- Atualize "leadStatus" e "conversationState" de forma conservadora. Se não tiver certeza, mantenha "contatado" e "DISCOVERY".
 `;
 
   const channelInstructions = isWhatsApp ? `

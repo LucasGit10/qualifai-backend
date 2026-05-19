@@ -116,6 +116,27 @@ ${debtContext}`,
         throw new Error('Resposta da IA não está no formato JSON esperado.');
       }
 
+      if (parsed.action === 'request_human') {
+        parsed.escalate = true;
+      }
+      if (parsed.action === 'end_conversation') {
+        parsed.endCall = true;
+        parsed.conversationState = parsed.conversationState || 'DISMISSED';
+      }
+      if (parsed.action === 'propose_agreement') {
+        parsed.leadStatus = parsed.leadStatus || 'em_negociacao';
+        parsed.conversationState = parsed.conversationState || 'NEGOTIATION';
+      }
+      if (!parsed.leadStatus) {
+        parsed.leadStatus = leadData.status || 'contatado';
+      }
+      if (!parsed.conversationState) {
+        parsed.conversationState = conversation.conversationState || 'DISCOVERY';
+      }
+      parsed.escalate = parsed.escalate === true;
+      parsed.endCall = parsed.endCall === true;
+      parsed.proposeScheduling = parsed.proposeScheduling === true;
+
       return parsed;
     } catch (error) {
       logger.error('Erro no generateResponse (Detalhado):', {

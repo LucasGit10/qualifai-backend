@@ -3,6 +3,7 @@ const Campaign = getModel('Campaign');
 const WhatsAppInstance = getModel('WhatsAppInstance');
 const csvParser = require('csv-parser');
 const multer = require('multer');
+const xlsx = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 const campaignService = require('../../services/campaignService');
@@ -27,15 +28,204 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
+    const allowedExtensions = ['.csv', '.xlsx', '.xls'];
+    const fileExtension = path.extname(file.originalname).toLowerCase();
+
+    if (allowedExtensions.includes(fileExtension)) {
       cb(null, true);
     } else {
-      const error = new Error('Apenas arquivos CSV são permitidos');
+      const error = new Error('Apenas arquivos CSV, XLSX ou XLS sao permitidos');
       cb(error, false);
     }
   },
   limits: { fileSize: 5 * 1024 * 1024 }
 });
+
+const CONTACT_COLUMN_ALIASES = {
+  name: [
+    'nome', 'nome completo', 'nome cliente', 'cliente', 'contato', 'lead',
+    'pessoa', 'responsavel', 'responsavel financeiro', 'titular', 'devedor'
+  ],
+  phone: [
+    'telefone', 'telefone celular', 'celular', 'whatsapp', 'whats', 'phone',
+    'fone', 'tel', 'numero', 'numero telefone', 'numero whatsapp',
+    'telefone 1', 'tel 1', 'contato telefone'
+  ],
+  email: [
+    'email', 'e-mail', 'mail', 'correio', 'correio eletronico',
+    'endereco email', 'email cliente'
+  ],
+  company: [
+    'empresa', 'company', 'companhia', 'organizacao', 'organizacao cliente',
+    'razao social', 'credor', 'loja', 'unidade'
+  ],
+  position: [
+    'cargo', 'funcao', 'position', 'role', 'titulo', 'ocupacao'
+  ],
+  segment: [
+    'segmento', 'segment', 'ramo', 'area', 'setor', 'mercado'
+  ],
+  city: [
+    'cidade', 'city', 'municipio', 'localidade'
+  ],
+  notes: [
+    'observacoes', 'observacao', 'obs', 'notes', 'nota', 'comentarios',
+    'comentario', 'detalhes'
+  ],
+};
+
+const CAMPAIGN_IMPORT_FIELDS = Object.keys(CONTACT_COLUMN_ALIASES);
+
+const normalizeHeader = (value = '') => String(value)
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim();
+
+const compactHeader = (value = '') => normalizeHeader(value).replace(/\s+/g, '');
+
+const buildHeaderIndex = (headers) => headers.map(header => ({
+  original: header,
+  normalized: normalizeHeader(header),
+  compact: compactHeader(header),
+}));
+
+const findHeaderByAliases = (headerIndex, aliases) => {
+  const normalizedAliases = aliases.map(normalizeHeader);
+  const compactAliases = aliases.map(compactHeader);
+
+  const exactMatch = headerIndex.find(header =>
+    normalizedAliases.includes(header.normalized) || compactAliases.includes(header.compact)
+  );
+  if (exactMatch) return exactMatch.original;
+
+  const contextualMatch = headerIndex.find(header =>
+    normalizedAliases.some(alias => alias.length > 3 && header.normalized.includes(alias))
+  );
+
+  return contextualMatch?.original || null;
+};
+
+const mapColumnsByAliases = (headers) => {
+  const headerIndex = buildHeaderIndex(headers);
+  return CAMPAIGN_IMPORT_FIELDS.reduce((mapping, field) => {
+    mapping[field] = findHeaderByAliases(headerIndex, CONTACT_COLUMN_ALIASES[field]);
+    return mapping;
+  }, {});
+};
+
+const getRequiredContactFields = (channel) => {
+  if (channel === 'email') return ['name', 'email'];
+  if (channel === 'whatsapp' || channel === 'whatsapp_official') return ['name', 'phone'];
+  return [];
+};
+
+const getMissingRequiredFields = (mapping, channel) => (
+  getRequiredContactFields(channel).filter(field => !mapping[field])
+);
+
+const getRowHeaders = (rows) => {
+  const headers = [];
+  const seen = new Set();
+
+  rows.forEach(row => {
+    Object.keys(row || {}).forEach(key => {
+      const header = String(key || '').trim().replace(/^\uFEFF/, '');
+      if (header && !seen.has(header)) {
+        seen.add(header);
+        headers.push(header);
+      }
+    });
+  });
+
+  return headers;
+};
+
+const normalizeRowKeys = (row) => Object.entries(row || {}).reduce((normalized, [key, value]) => {
+  const cleanKey = String(key || '').trim().replace(/^\uFEFF/, '');
+  if (cleanKey) normalized[cleanKey] = value == null ? '' : String(value).trim();
+  return normalized;
+}, {});
+
+const detectCsvSeparator = (fileContent) => {
+  const firstLine = fileContent.split(/\r?\n/).find(line => line.trim()) || '';
+  const candidates = [',', ';', '\t'];
+  return candidates
+    .map(separator => ({
+      separator,
+      count: (firstLine.match(new RegExp(separator === '\t' ? '\\t' : `\\${separator}`, 'g')) || []).length,
+    }))
+    .sort((a, b) => b.count - a.count)[0]?.separator || ',';
+};
+
+const readCsvRows = (filePath) => new Promise((resolve, reject) => {
+  const fileContent = fs.readFileSync(filePath, 'utf8');
+  const separator = detectCsvSeparator(fileContent);
+  const rows = [];
+
+  fs.createReadStream(filePath)
+    .pipe(csvParser({
+      separator,
+      mapHeaders: ({ header }) => String(header || '').trim().replace(/^\uFEFF/, ''),
+    }))
+    .on('data', row => rows.push(normalizeRowKeys(row)))
+    .on('end', () => resolve(rows))
+    .on('error', reject);
+});
+
+const readSpreadsheetRows = (filePath) => {
+  const workbook = xlsx.readFile(filePath, { cellDates: true });
+  return workbook.SheetNames.flatMap(sheetName => {
+    const sheet = workbook.Sheets[sheetName];
+    return xlsx.utils.sheet_to_json(sheet, { defval: '', raw: false })
+      .map(normalizeRowKeys);
+  });
+};
+
+const readCampaignContactsFile = async (filePath, originalName) => {
+  const extension = path.extname(originalName).toLowerCase();
+  if (extension === '.csv') return readCsvRows(filePath);
+  if (extension === '.xlsx' || extension === '.xls') return readSpreadsheetRows(filePath);
+  throw new Error('Formato de arquivo nao suportado');
+};
+
+const getMappedValue = (row, mapping, field) => {
+  const header = mapping[field];
+  if (!header) return '';
+  return String(row[header] || '').trim();
+};
+
+const inferColumnsWithAI = async ({ headers, sampleRows, channel, currentMapping }) => {
+  try {
+    const result = await aiService.inferCampaignContactColumns({
+      headers,
+      sampleRows,
+      channel,
+      currentMapping,
+    });
+
+    const inferredMapping = result?.mapping || {};
+    const validHeaders = new Set(headers);
+    const mapping = { ...currentMapping };
+
+    CAMPAIGN_IMPORT_FIELDS.forEach(field => {
+      const inferredHeader = inferredMapping[field];
+      if (!mapping[field] && inferredHeader && validHeaders.has(inferredHeader)) {
+        mapping[field] = inferredHeader;
+      }
+    });
+
+    return {
+      mapping,
+      aiConfidence: result?.confidence ?? null,
+      aiReasoning: result?.reasoning || '',
+    };
+  } catch (error) {
+    logger.warn('IA nao conseguiu inferir colunas de campanha:', error.message);
+    return { mapping: currentMapping, aiConfidence: null, aiReasoning: '' };
+  }
+};
 
 class CampaignController {
   
@@ -125,7 +315,7 @@ class CampaignController {
         return res.status(400).json({ message: err.message });
       }
       if (!req.file) {
-        return res.status(400).json({ message: 'Arquivo CSV é obrigatório' });
+        return res.status(400).json({ message: 'Arquivo CSV, XLSX ou XLS e obrigatorio' });
       }
 
       try {
@@ -135,99 +325,124 @@ class CampaignController {
           return res.status(404).json({ message: 'Campanha não encontrada' });
         }
         
-        const fileContent = fs.readFileSync(req.file.path, 'utf8');
-        const separator = fileContent.includes(';') ? ';' : ',';
+        const rows = await readCampaignContactsFile(req.file.path, req.file.originalname);
+        if (!rows.length) {
+          fs.unlinkSync(req.file.path);
+          return res.status(400).json({ message: 'O arquivo nao possui linhas para importar' });
+        }
+
+        const headers = getRowHeaders(rows);
+        let columnMapping = mapColumnsByAliases(headers);
+        let mappingSource = 'automatic';
+        let aiConfidence = null;
+        let aiReasoning = '';
+
+        if (getMissingRequiredFields(columnMapping, campaign.channel).length > 0) {
+          const aiResult = await inferColumnsWithAI({
+            headers,
+            sampleRows: rows.slice(0, 8),
+            channel: campaign.channel,
+            currentMapping: columnMapping,
+          });
+
+          columnMapping = aiResult.mapping;
+          aiConfidence = aiResult.aiConfidence;
+          aiReasoning = aiResult.aiReasoning;
+          if (aiConfidence !== null) mappingSource = 'ai-assisted';
+        }
+
+        const missingFields = getMissingRequiredFields(columnMapping, campaign.channel);
+        if (missingFields.length > 0) {
+          fs.unlinkSync(req.file.path);
+          return res.status(400).json({
+            message: `Nao foi possivel reconhecer as colunas obrigatorias: ${missingFields.join(', ')}`,
+            detectedColumns: headers,
+            columnMapping,
+          });
+        }
 
         const contacts = [];
         const errors = [];
-        let rowCount = 0;
 
-        fs.createReadStream(req.file.path)
-          .pipe(csvParser({ separator }))
-          .on('data', (row) => {
-            rowCount++;
-            let identifierField, identifierValue;
-            
-            switch(campaign.channel) {
-                case 'whatsapp':
-                case 'whatsapp_official':
-                    identifierField = 'telefone';
-                    identifierValue = row.telefone;
-                    break;
-                case 'email':
-                    identifierField = 'email';
-                    identifierValue = row.email;
-                    break;
-                default:
-                    errors.push(`Canal de campanha inválido: ${campaign.channel}`);
-                    return;
+        rows.forEach((row, index) => {
+          const rowNumber = index + 2;
+          const name = getMappedValue(row, columnMapping, 'name') || getMappedValue(row, columnMapping, 'company');
+
+          if (!name) {
+            errors.push(`Linha ${rowNumber} sem nome reconhecido`);
+            return;
+          }
+
+          const contact = {
+            name,
+            company: getMappedValue(row, columnMapping, 'company'),
+            position: getMappedValue(row, columnMapping, 'position'),
+            segment: getMappedValue(row, columnMapping, 'segment'),
+            city: getMappedValue(row, columnMapping, 'city'),
+            notes: getMappedValue(row, columnMapping, 'notes'),
+          };
+
+          if (campaign.channel === 'whatsapp' || campaign.channel === 'whatsapp_official') {
+            const rawPhone = getMappedValue(row, columnMapping, 'phone');
+            let phone = rawPhone.replace(/\D/g, '').replace(/^0+/, '');
+            if (!phone.startsWith('55') && (phone.length === 10 || phone.length === 11)) {
+              phone = `55${phone}`;
             }
-
-            if (!row.nome || !identifierValue) {
-                errors.push(`Linha ${rowCount} com dados incompletos (nome ou ${identifierField} faltando)`);
-                return;
+            if (phone.length < 12 || phone.length > 13) {
+              errors.push(`Telefone invalido na linha ${rowNumber}: ${rawPhone || 'vazio'}`);
+              return;
             }
-            
-            let contact = {
-                name: row.nome.trim(),
-                company: row.empresa?.trim() || '',
-                position: row.cargo?.trim() || '',
-                segment: row.segmento?.trim() || '',
-                city: row.cidade?.trim() || '',
-                notes: row.observacoes?.trim() || ''
-            };
-            
-            if (campaign.channel === 'whatsapp' || campaign.channel === 'whatsapp_official') {
-                let phone = String(row.telefone).replace(/\D/g, '');
-                if (!phone.startsWith('55')) phone = '55' + phone; 
-                if (phone.length < 12 || phone.length > 13) { 
-                    errors.push(`Telefone inválido na linha ${rowCount}: ${row.telefone}`);
-                    return;
-                }
-                contact.phone = phone;
-            } else if (campaign.channel === 'email') {
-                const email = row.email.trim().toLowerCase();
-                if (!/^\S+@\S+\.\S+$/.test(email)) {
-                    errors.push(`Email inválido na linha ${rowCount}: ${row.email}`);
-                    return;
-                }
-                contact.email = email;
+            contact.phone = phone;
+          } else if (campaign.channel === 'email') {
+            const email = getMappedValue(row, columnMapping, 'email').toLowerCase();
+            if (!/^\S+@\S+\.\S+$/.test(email)) {
+              errors.push(`Email invalido na linha ${rowNumber}: ${email || 'vazio'}`);
+              return;
             }
-            
-            contacts.push(contact);
-          })
-          .on('end', async () => {
-            try {
-              const uniqueContacts = contacts.filter((contact, index, self) => {
-                const key = (campaign.channel === 'email') ? 'email' : 'phone';
-                return index === self.findIndex(c => c[key] === contact[key]);
-              });
+            contact.email = email;
+          } else {
+            errors.push(`Canal de campanha invalido: ${campaign.channel}`);
+            return;
+          }
 
-              const duplicatesRemoved = contacts.length - uniqueContacts.length;
+          contacts.push(contact);
+        });
 
-              campaign.contacts = uniqueContacts;
-              await campaign.updateStats();
-              
-              fs.unlinkSync(req.file.path);
-
-              res.json({
-                message: 'Contatos importados com sucesso',
-                imported: uniqueContacts.length,
-                duplicatesRemoved,
-                errors: errors.slice(0, 10),
-                totalErrors: errors.length
-              });
-            } catch (saveError) {
-              logger.error('Erro ao salvar contatos da campanha:', saveError);
-              if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-              res.status(500).json({ message: 'Erro ao processar contatos' });
-            }
-          })
-          .on('error', (streamError) => {
-            logger.error('Erro de leitura do CSV:', streamError);
-            if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-            res.status(500).json({ message: 'Erro ao ler o arquivo CSV.' });
+        if (!contacts.length) {
+          fs.unlinkSync(req.file.path);
+          return res.status(400).json({
+            message: 'Nenhum contato valido foi encontrado no arquivo',
+            errors: errors.slice(0, 10),
+            totalErrors: errors.length,
+            detectedColumns: headers,
+            columnMapping,
           });
+        }
+
+        const uniqueContacts = contacts.filter((contact, index, self) => {
+          const key = (campaign.channel === 'email') ? 'email' : 'phone';
+          return index === self.findIndex(c => c[key] === contact[key]);
+        });
+
+        const duplicatesRemoved = contacts.length - uniqueContacts.length;
+
+        campaign.contacts = uniqueContacts;
+        await campaign.updateStats();
+
+        fs.unlinkSync(req.file.path);
+
+        res.json({
+          message: 'Contatos importados com sucesso',
+          imported: uniqueContacts.length,
+          duplicatesRemoved,
+          errors: errors.slice(0, 10),
+          totalErrors: errors.length,
+          detectedColumns: headers,
+          columnMapping,
+          mappingSource,
+          aiConfidence,
+          aiReasoning,
+        });
       } catch (error) {
         logger.error('Erro interno no uploadContacts:', error);
         if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);

@@ -13,6 +13,7 @@ const axios = require('axios');
 const OneSignalService = require('../../services/oneSignalService');
 const aiService = require('../../services/aiService');
 const ttsService = require('../../services/textToSpeechService');
+const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
 const Lead = require('../../models/Lead');
 const User = require('../../models/User');
 const Conversation = require('../../models/Conversation');
@@ -382,6 +383,11 @@ class VoiceAgentController {
           conversation.messages.push({ role: 'ai', content: finalAiResponse, channel: 'voice' });
       }
       await conversation.save();
+      negotiationIntelligenceService.refreshConversationInBackground({
+        conversationId: conversation._id,
+        userId: conversation.user?._id?.toString() || conversation.user?.toString(),
+        io: req.app.get('io'),
+      });
 
       res.type('text/xml');
       res.send(twiml.toString());

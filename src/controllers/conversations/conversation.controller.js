@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Conversation = getModel('Conversation');
 const Lead = getModel('Lead');
 const WhatsAppInstance = getModel('WhatsAppInstance');
+const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
 const logger = require('../../utils/logger');
 
 class ConversationController {
@@ -221,6 +222,28 @@ class ConversationController {
         message: 'Erro interno do servidor',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
+    }
+  }
+
+  async analyzeNegotiation(req, res) {
+    try {
+      const { id } = req.params;
+      const userId = req.user.id;
+
+      const { intelligence, conversation } = await negotiationIntelligenceService.refreshConversation({
+        conversationId: id,
+        userId,
+        io: req.app.get('io'),
+      });
+
+      res.json({
+        success: true,
+        intelligence,
+        conversation,
+      });
+    } catch (error) {
+      logger.error('Erro ao analisar negociacao:', error);
+      res.status(error.statusCode || 500).json({ message: error.message || 'Erro interno do servidor' });
     }
   }
 

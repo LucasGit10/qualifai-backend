@@ -8,6 +8,7 @@ const TeamMember = getModel('TeamMember');
 const aiService = require('../../services/aiService');
 const whatsappService = require('../../services/whatsappService');
 const oneSignalService = require('../../services/oneSignalService');
+const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
 const logger = require('../../utils/logger');
 
 const isAiUnavailableResult = (result) =>
@@ -365,6 +366,11 @@ class WhatsAppAIController {
         
         await lead.save();
         await conversation.save();
+        negotiationIntelligenceService.refreshConversationInBackground({
+            conversationId: conversation._id,
+            userId,
+            io: req.app.get('io'),
+        });
         
         if (conversationEnded) {
             logger.info(`[Auto-Treinamento] Conversa ${conversation._id} (WhatsApp) marcada para análise.`);

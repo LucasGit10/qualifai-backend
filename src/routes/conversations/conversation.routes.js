@@ -10,6 +10,7 @@ router.get('/:id', auth, conversationController.getConversationById);
 router.put('/:id/status', auth, conversationController.updateConversationStatus);
 router.put('/:id/read', auth, conversationController.markAsRead);
 router.post('/:id/notes', auth, conversationController.addNote);
+router.post('/:id/negotiation-intelligence', auth, conversationController.analyzeNegotiation);
 
 // Rota genérica para atualização. Deve vir depois de rotas mais específicas.
 router.put('/:id', auth, conversationController.updateConversation);

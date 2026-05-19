@@ -202,6 +202,198 @@ Responda em JSON válido:
       throw new Error('Falha na análise do documento com IA.');
     }
   }
+
+  /**
+   * Infere o mapeamento de colunas de uma planilha de contatos para campanhas.
+   * @param {{ headers: string[], sampleRows: object[], channel: string, currentMapping?: object }} params
+   * @returns {Promise<object>} { mapping, confidence, reasoning }
+   */
+  async inferCampaignContactColumns({ headers = [], sampleRows = [], channel, currentMapping = {} }) {
+    const allowedFields = ['name', 'phone', 'email', 'company', 'position', 'segment', 'city', 'notes'];
+    const sample = sampleRows.slice(0, 8).map(row => (
+      Object.fromEntries(headers.map(header => [header, row?.[header] ?? '']))
+    ));
+
+    const prompt = `Voce ajuda a importar contatos para campanhas de cobranca. Mapeie os cabecalhos recebidos para campos internos.
+
+Canal da campanha: ${channel}
+Cabecalhos existentes: ${JSON.stringify(headers)}
+Mapeamento ja identificado por regras: ${JSON.stringify(currentMapping)}
+Amostra de linhas: ${JSON.stringify(sample)}
+
+Campos internos permitidos:
+- name: nome do contato/devedor
+- phone: telefone ou WhatsApp
+- email: email
+- company: empresa, credor ou razao social
+- position: cargo ou funcao
+- segment: segmento, setor ou ramo
+- city: cidade
+- notes: observacoes ou comentarios
+
+Responda APENAS com JSON valido neste formato:
+{
+  "mapping": {
+    "name": "cabecalho exato ou null",
+    "phone": "cabecalho exato ou null",
+    "email": "cabecalho exato ou null",
+    "company": "cabecalho exato ou null",
+    "position": "cabecalho exato ou null",
+    "segment": "cabecalho exato ou null",
+    "city": "cabecalho exato ou null",
+    "notes": "cabecalho exato ou null"
+  },
+  "confidence": 0,
+  "reasoning": "explicacao curta"
+}
+
+Regras:
+- Use somente cabecalhos que existem exatamente em Cabecalhos existentes.
+- Nao invente cabecalho.
+- Para WhatsApp, telefone/WhatsApp e nome sao obrigatorios.
+- Para email, email e nome sao obrigatorios.
+- Se nao tiver certeza, use null para aquele campo.`;
+
+    try {
+      const raw = await chatCompletion(
+        [{ role: 'user', content: prompt }],
+        { temperature: 0.1, max_tokens: 500, response_format: { type: 'json_object' } }
+      );
+
+      let cleanRaw = raw.trim();
+      if (cleanRaw.startsWith('```')) {
+        cleanRaw = cleanRaw.replace(/^```(json)?\n?/, '').replace(/\n?```$/, '').trim();
+      }
+
+      const parsed = JSON.parse(cleanRaw);
+      const headerSet = new Set(headers);
+      const mapping = {};
+
+      allowedFields.forEach(field => {
+        const inferredHeader = parsed?.mapping?.[field];
+        mapping[field] = inferredHeader && headerSet.has(inferredHeader) ? inferredHeader : null;
+      });
+
+      const confidence = Number.isFinite(Number(parsed.confidence))
+        ? Math.max(0, Math.min(100, Number(parsed.confidence)))
+        : null;
+
+      return {
+        mapping,
+        confidence,
+        reasoning: parsed.reasoning || '',
+      };
+    } catch (error) {
+      logger.error('Erro ao inferir colunas de campanha com IA:', error);
+      throw new Error('Falha ao inferir colunas de campanha com IA.');
+    }
+  }
+
+  /**
+   * Gera um snapshot operacional da negociacao para orientar o atendente.
+   * @param {object} params
+   * @param {object} params.conversation - Conversa com messages[]
+   * @param {object} params.lead - Lead/devedor
+   * @param {Array} params.debts - Dividas associadas
+   * @returns {Promise<object>} Inteligencia de negociacao
+   */
+  async analyzeNegotiationStrategy({ conversation, lead, debts = [], userSettings = {} }) {
+    const recentMessages = (conversation.messages || []).slice(-30);
+    const history = recentMessages
+      .map(m => {
+        const role = m.role === 'ai' ? 'Agente' : m.role === 'lead' ? 'Cliente' : m.role === 'human' ? 'Atendente' : 'Sistema';
+        return `${role}: ${m.content}`;
+      })
+      .join('\n');
+
+    const debtContext = debts.length
+      ? debts.map(d => `- Contrato ${d.contractNumber || 'S/N'}: saldo R$ ${d.currentBalance || 0}, original R$ ${d.originalAmount || 0}, status ${d.status || 'ativo'}`).join('\n')
+      : `- Valor conhecido no lead: R$ ${lead.value || 0}`;
+    const aiConfig = userSettings?.aiConfig || {};
+    const negotiationRules = [
+      aiConfig.negotiationRules ? JSON.stringify(aiConfig.negotiationRules) : null,
+      aiConfig.maxDiscount ? `Desconto maximo permitido: ${aiConfig.maxDiscount}` : null,
+      aiConfig.maxInstallments ? `Parcelamento maximo permitido: ${aiConfig.maxInstallments}` : null,
+      aiConfig.minimumDownPayment ? `Entrada minima: ${aiConfig.minimumDownPayment}` : null,
+      aiConfig.prompt ? `Diretriz do operador: ${aiConfig.prompt}` : null,
+    ].filter(Boolean).join('\n') || 'Sem regras comerciais estruturadas cadastradas.';
+
+    const prompt = `VocÃª Ã© um estrategista sÃªnior de cobranÃ§a humanizada. Analise a conversa e gere um painel tÃ¡tico para o atendente decidir a prÃ³xima melhor aÃ§Ã£o.
+
+Dados do cliente:
+- Nome: ${lead.name || 'NÃ£o informado'}
+- Empresa: ${lead.company || 'NÃ£o informado'}
+- Status do lead: ${lead.status || 'NÃ£o informado'}
+- Canal: ${conversation.channel || 'NÃ£o informado'}
+
+DÃ­vidas:
+${debtContext}
+
+Regras comerciais e limites configurados:
+${negotiationRules}
+
+HistÃ³rico recente:
+${history || 'Sem histÃ³rico disponÃ­vel.'}
+
+Responda APENAS com JSON vÃ¡lido, neste formato:
+{
+  "temperature": "quente|morno|frio|critico|desconhecido",
+  "agreementProbability": 0,
+  "mood": "estado emocional em poucas palavras",
+  "mainObjection": "principal objeÃ§Ã£o ou barreira",
+  "riskLevel": "baixo|medio|alto|critico|desconhecido",
+  "recommendedAction": "aÃ§Ã£o recomendada para o atendente",
+  "recommendedProposal": "proposta objetiva e plausÃ­vel, sem inventar desconto se nÃ£o houver regra",
+  "suggestedMessage": "mensagem curta pronta para enviar ao cliente",
+  "avoid": ["coisas que o atendente deve evitar"],
+  "humanSummary": "resumo executivo em atÃ© 3 frases",
+  "flags": ["alertas como contestacao, juridico, vulnerabilidade, pedido_humano, oportunidade"],
+  "nextStep": "prÃ³ximo passo operacional"
+}
+
+Regras:
+- NÃ£o invente valores de desconto, juros, boleto ou condiÃ§Ãµes que nÃ£o estejam no contexto.
+- Se nÃ£o houver informaÃ§Ã£o suficiente, recomende coletar o dado faltante.
+- Em risco emocional, jurÃ­dico, falecimento, contestaÃ§Ã£o forte ou pedido para parar contato, marque riskLevel como alto ou critico e recomende humano.
+- A suggestedMessage deve ser natural para WhatsApp, com no mÃ¡ximo 2 frases.`;
+
+    try {
+      const raw = await chatCompletion(
+        [{ role: 'user', content: prompt }],
+        { temperature: 0.25, max_tokens: 700, response_format: { type: 'json_object' } }
+      );
+
+      let cleanRaw = raw.trim();
+      if (cleanRaw.startsWith('```')) {
+        cleanRaw = cleanRaw.replace(/^```(json)?\n?/, '').replace(/\n?```$/, '').trim();
+      }
+
+      const parsed = JSON.parse(cleanRaw);
+      const clampProbability = Number.isFinite(Number(parsed.agreementProbability))
+        ? Math.max(0, Math.min(100, Number(parsed.agreementProbability)))
+        : null;
+
+      return {
+        temperature: ['quente', 'morno', 'frio', 'critico', 'desconhecido'].includes(parsed.temperature) ? parsed.temperature : 'desconhecido',
+        agreementProbability: clampProbability,
+        mood: parsed.mood || 'NÃ£o identificado',
+        mainObjection: parsed.mainObjection || 'Ainda nÃ£o identificada',
+        riskLevel: ['baixo', 'medio', 'alto', 'critico', 'desconhecido'].includes(parsed.riskLevel) ? parsed.riskLevel : 'desconhecido',
+        recommendedAction: parsed.recommendedAction || 'Revisar a conversa antes de prosseguir.',
+        recommendedProposal: parsed.recommendedProposal || 'Sem proposta recomendada no momento.',
+        suggestedMessage: parsed.suggestedMessage || '',
+        avoid: Array.isArray(parsed.avoid) ? parsed.avoid.slice(0, 6) : [],
+        humanSummary: parsed.humanSummary || 'Resumo indisponÃ­vel.',
+        flags: Array.isArray(parsed.flags) ? parsed.flags.slice(0, 8) : [],
+        nextStep: parsed.nextStep || 'Definir prÃ³ximo contato.',
+        analyzedAt: new Date(),
+        source: 'ai',
+      };
+    } catch (error) {
+      logger.error('Erro ao gerar inteligencia de negociacao:', error);
+      throw new Error('Falha ao gerar inteligencia de negociacao.');
+    }
+  }
 }
 
 module.exports = new AiContentService();

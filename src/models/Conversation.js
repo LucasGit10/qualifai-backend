@@ -127,6 +127,38 @@ const conversationSchema = new mongoose.Schema({
       default: null
     }
   },
+  negotiationIntelligence: {
+    temperature: {
+      type: String,
+      enum: ['quente', 'morno', 'frio', 'critico', 'desconhecido'],
+      default: 'desconhecido'
+    },
+    agreementProbability: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: null
+    },
+    mood: String,
+    mainObjection: String,
+    riskLevel: {
+      type: String,
+      enum: ['baixo', 'medio', 'alto', 'critico', 'desconhecido'],
+      default: 'desconhecido'
+    },
+    recommendedAction: String,
+    recommendedProposal: String,
+    suggestedMessage: String,
+    avoid: [String],
+    humanSummary: String,
+    flags: [String],
+    nextStep: String,
+    analyzedAt: Date,
+    source: {
+      type: String,
+      default: 'ai'
+    }
+  },
   conversationState: { type: String, default: 'DISCOVERY' },
 }, {
   timestamps: true

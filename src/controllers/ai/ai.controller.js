@@ -17,6 +17,7 @@ const WhatsappInstance = getModel('WhatsAppInstance');
 const evolutionApiService = require('../../services/evolutionApiService');
 const zapiService = require('../../services/zapiService');
 const MessageTemplate = getModel('MessageTemplate');
+const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
 
 const isAiUnavailableResult = (result) =>
     result?.aiUnavailable === true || result?.action === 'disable_ai';
@@ -241,6 +242,11 @@ class AIController {
             conversation.lastOutboundMessageAt = new Date();
 
             await conversation.save();
+            negotiationIntelligenceService.refreshConversationInBackground({
+                conversationId: conversation._id,
+                userId,
+                io: req.app.get('io'),
+            });
             
             if (user.settings?.aiConfig?.enableVoiceInteraction) {
                 const audioBuffer = await aiService.textToSpeech(finalAiResponse, user.settings.aiConfig.voiceModel);
@@ -327,8 +333,41 @@ class AIController {
                 return res.json({ success: true, conversation, aiResponse: null, message: 'IA desativada automaticamente.' });
             }
             aiResponse = getAiReply(aiResult);
+            if (aiResult.leadStatus) {
+                lead.status = aiResult.leadStatus;
+            }
+            if (aiResult.conversationState) {
+                conversation.conversationState = aiResult.conversationState;
+            }
+
+            if (aiResult.escalate === true || aiResult.action === 'request_human') {
+                conversation.handedOffToHuman = true;
+                conversation.handedOffAt = new Date();
+                conversation.status = 'escalated';
+                conversation.aiEnabled = false;
+                let conversationSummary = '';
+                try {
+                    conversationSummary = await aiService.summarizeConversation(conversation.messages, lead);
+                } catch (summaryError) {
+                    logger.error('[Handoff AI Action] Erro ao gerar resumo:', summaryError);
+                    conversationSummary = 'NÃ£o foi possÃ­vel gerar o resumo automÃ¡tico.';
+                }
+                conversation.messages.push({
+                    role: 'system',
+                    content: 'A IA recomendou transferir esta conversa para um especialista.',
+                    channel: conversation.channel,
+                });
+                conversation.messages.push({
+                    role: 'system',
+                    content: `ðŸ“‹ RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
+                    channel: conversation.channel,
+                });
+            } else if (aiResult.endCall === true) {
+                conversation.status = 'closed';
+                conversation.endedAt = new Date();
+            }
             
-            if (['novo', 'contatado', 'morno', 'frio'].includes(lead.status)) {
+            if (!aiResult.escalate && !aiResult.endCall && ['novo', 'contatado', 'morno', 'frio'].includes(lead.status)) {
                 const classification = await aiService.classifyLead(conversation, lead, user.settings);
                 
                 if (classification === 'quente') {
@@ -366,6 +405,11 @@ class AIController {
         conversation.lastMessageAt = new Date();
         conversation.lastOutboundMessageAt = new Date();
         await conversation.save();
+        negotiationIntelligenceService.refreshConversationInBackground({
+            conversationId: conversation._id,
+            userId,
+            io: req.app.get('io'),
+        });
 
         if (user.settings?.aiConfig?.enableVoiceInteraction) {
             try {
@@ -380,7 +424,11 @@ class AIController {
             await this.sendMessageToChannel(lead, { type: 'text', content: aiResponse }, channel, user.settings, instance);
         }
         
-        req.app.get('io').to(`user-${userId}`).emit('conversation_updated', { conversation });
+        if (conversation.handedOffToHuman) {
+            req.app.get('io').to(`user-${userId}`).emit('conversation_escalated', { conversation });
+        } else {
+            req.app.get('io').to(`user-${userId}`).emit('conversation_updated', { conversation });
+        }
 
         res.json({ success: true, conversation, aiResponse });
 
