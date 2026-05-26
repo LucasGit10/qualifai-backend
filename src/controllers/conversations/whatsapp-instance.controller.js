@@ -398,6 +398,13 @@ async function sendMessage(req, res) {
         }
 
         // Atualiza estatísticas da instância
+
+        if (conversation.lead) {
+            conversation.lead.lastContact = new Date();
+            await conversation.lead.save();
+        }
+
+        // Atualiza estatísticas da instância
         await WhatsAppInstance.findByIdAndUpdate(instance._id, { $inc: { 'messagesSent': successes.length } });
 
         return res.json({ 
@@ -416,6 +423,117 @@ async function sendMessage(req, res) {
             userId: req.user.id // Adiciona o ID do usuário ao log de erro
         });
         return res.status(500).json({ error: 'Falha ao enviar mensagem', details: err.message });
+    }
+}
+
+async function sendDocument(req, res) {
+    logger.info('[sendDocument] Nova requisição para enviar documento recebida.');
+    
+    try {
+        const { conversationId, senderRole } = req.body;
+        const userId = req.user.id;
+        const file = req.file;
+
+        if (!conversationId || !file) {
+            return res.status(400).json({ error: 'ID da conversa e arquivo são obrigatórios' });
+        }
+
+        const conversation = await Conversation.findOne({ _id: conversationId, user: userId })
+            .populate('instance')
+            .populate('lead');
+
+        if (!conversation) {
+            return res.status(404).json({ error: 'Conversa não encontrada' });
+        }
+
+        const phones = new Set();
+        if (conversation.lead?.phone) phones.add(conversation.lead.phone);
+        if (conversation.lead?.contacts && Array.isArray(conversation.lead.contacts)) {
+            conversation.lead.contacts.forEach(c => {
+                if (c.type === 'phone' && c.value) {
+                    phones.add(c.value);
+                }
+            });
+        }
+
+        if (phones.size === 0) {
+            return res.status(400).json({ error: 'O devedor não possui nenhum número de telefone cadastrado.' });
+        }
+
+        const instance = conversation.instance;
+        if (!instance) {
+            throw new Error('Nenhuma instância do WhatsApp (Meta) associada a esta conversa.');
+        }
+
+        logger.info(`[sendDocument] Realizando upload do arquivo para a Meta API...`);
+        const mediaId = await whatsappService.uploadMedia(instance, file.buffer, file.mimetype || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+
+        if (!mediaId) {
+            throw new Error('Falha ao obter mediaId da Meta API.');
+        }
+
+        const results = [];
+        for (const num of phones) {
+            try {
+                const resMeta = await whatsappService.sendDocumentMessage(instance, num, mediaId, file.originalname);
+                results.push({ num, success: true, messageId: resMeta.messages?.[0]?.id });
+            } catch (err) {
+                logger.error(`[sendDocument] Falha ao enviar para ${num}: ${err.message}`);
+                results.push({ num, success: false, error: err.message });
+            }
+        }
+
+        const successes = results.filter(r => r.success);
+        if (successes.length === 0) {
+            return res.status(500).json({ 
+                error: 'Falha ao enviar documento para todos os números cadastrados.',
+                details: results
+            });
+        }
+
+        const allowedRoles = ['ai', 'human', 'lead', 'system'];
+        const messageRole = allowedRoles.includes(senderRole) ? senderRole : 'human';
+
+        conversation.messages.push({
+            role: messageRole,
+            content: `[Documento Enviado]: ${file.originalname}`,
+            channel: 'whatsapp',
+            timestamp: new Date(),
+            metadata: { 
+                recipients: Array.from(phones).join(', '),
+                results: results,
+                mediaId: mediaId,
+                filename: file.originalname
+            }
+        });
+        
+        conversation.sentCount = (conversation.sentCount || 0) + successes.length;
+        conversation.lastMessageAt = new Date();
+        conversation.lastOutboundMessageAt = new Date();
+        await conversation.save();
+
+        if (conversation.lead) {
+            conversation.lead.lastContact = new Date();
+            await conversation.lead.save();
+        }
+
+        await WhatsAppInstance.findByIdAndUpdate(instance._id, { $inc: { 'messagesSent': successes.length } });
+
+        return res.json({ 
+            success: true, 
+            sentCount: successes.length, 
+            totalAttempted: phones.size,
+            details: results
+        });
+
+    } catch (err) {
+        logger.error('Erro em sendDocument:', {
+            errorMessage: err.message,
+            stack: err.stack,
+            conversationId: req.body.conversationId,
+            userId: req.user.id
+        });
+        return res.status(500).json({ error: 'Falha ao enviar documento', details: err.message });
     }
 }
 
@@ -1164,14 +1282,15 @@ async function getMediaContent(req, res) {
 module.exports = {
     completeOnboarding,
     createInstance,
+    updateInstanceToken,
+    deleteInstance,
     listInstances,
     subscribeInstanceWebhook,
     sendMessage,
+    sendDocument,
     listReceivedMessages,
-    verifyWebhook,
     receiveWebhook,
-    updateInstanceToken,
-    deleteInstance,
+    verifyWebhook,
     registerWabaInfo,
     checkMigrationStatus,
     getMediaContent

@@ -261,6 +261,32 @@ async function sendAudioMessage(instance, to, mediaId) {
 }
 
 /**
+ * Envia uma mensagem de documento usando um ID de mídia.
+ */
+async function sendDocumentMessage(instance, to, mediaId, filename = 'documento.pdf') {
+    const url = `https://graph.facebook.com/${API_VERSION}/${instance.phoneNumberId}/messages`;
+    const token = instance.apiCredentials.token;
+    const payload = { 
+        messaging_product: 'whatsapp', 
+        to, 
+        type: 'document', 
+        document: { id: mediaId, filename: filename } 
+    };
+    try {
+        const response = await axios.post(url, payload, {
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            httpsAgent,
+            timeout: REQUEST_TIMEOUT
+        });
+        logger.info('API da Meta respondeu com sucesso para sendDocumentMessage.', { wamid: response.data?.messages?.[0]?.id });
+        return response.data;
+    } catch (error) {
+        logger.error('Erro detalhado ao enviar mensagem de documento via WhatsApp:', { message: error.message, code: error.code, isAxiosError: error.isAxiosError, response: error.response?.data });
+        throw new Error(`Falha ao enviar mensagem de documento: ${error.response?.data?.error?.message || error.message}`);
+    }
+}
+
+/**
  * Obtém a URL de download de uma mídia a partir de seu ID.
  */
 async function getMediaUrl(mediaId, token) {
@@ -644,6 +670,7 @@ module.exports = {
     sendTextMessage,
     uploadMedia,
     sendAudioMessage,
+    sendDocumentMessage,
     getMediaUrl,
     downloadMedia,
     exchangeCodeForTokensAndInfo,

@@ -1178,7 +1178,7 @@ class SpreadsheetController {
       doc.fillColor(secondaryColor).fontSize(10).font('Helvetica').text(`Gerado em: ${format(new Date(), 'dd/mm/yyyy HH:mm:ss')}`, { align: 'center' });
       doc.moveDown(2);
 
-      if (type === 'listagem') {
+      if (type === 'listagem' || type === 'importacao') {
         const fmtPhone = (phone) => {
           const clean = String(phone || '').replace(/\D/g, '');
           if (!clean) return '-';
@@ -1193,10 +1193,11 @@ class SpreadsheetController {
         doc.moveDown(1);
 
         const columns = [
-          { title: 'Nome', x: 50, width: 135 },
-          { title: 'Telefone', x: 185, width: 82 },
-          { title: 'Status', x: 267, width: 165 },
-          { title: 'Total', x: 432, width: 117 }
+          { title: 'Nome', x: 50, width: 130 },
+          { title: 'Telefone', x: 180, width: 75 },
+          { title: 'Empreendimento', x: 255, width: 90 },
+          { title: 'Status', x: 345, width: 95 },
+          { title: 'Total', x: 440, width: 105 }
         ];
         const drawHeader = () => {
           const y = doc.y;
@@ -1213,13 +1214,15 @@ class SpreadsheetController {
           }
           const y = doc.y;
           if (index % 2 === 0) doc.rect(45, y - 2, 510, 18).fill('#f8fafc');
-          const reportStatus = d.leadInfo?.status || '-';
+          const reportStatus = type === 'importacao' ? (d.importStatus || '-') : (d.leadInfo?.status || '-');
           const phone = d.telefone1 || d.telefone2 || d.leadInfo?.phone;
+          const empreendimento = d.empreendimento || '-';
           const total = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.totalGeral || 0);
           doc.fillColor('#111827').fontSize(8).font('Helvetica').text(d.cliente || '-', columns[0].x, y, { width: columns[0].width, ellipsis: true });
           doc.text(fmtPhone(phone), columns[1].x, y, { width: columns[1].width });
-          doc.text(reportStatus, columns[2].x, y, { width: columns[2].width, ellipsis: true });
-          doc.text(total, columns[3].x, y, { width: columns[3].width, align: 'right' });
+          doc.text(empreendimento, columns[2].x, y, { width: columns[2].width, ellipsis: true });
+          doc.text(reportStatus, columns[3].x, y, { width: columns[3].width, ellipsis: true });
+          doc.text(total, columns[4].x, y, { width: columns[4].width, align: 'right' });
           doc.y = y + 18;
         });
 
