@@ -25,7 +25,7 @@ class ConversationController {
 	      }
 
       const conversations = await Conversation.find(filter)
-        .populate('lead', 'name phone email company')
+        .populate('lead', 'name phone email company taxId address')
         // Adicionar o populate para a instância
 	        .populate('instance', 'instanceName phoneNumber')
 	        .populate('assignedTeamMember', 'name roleLabel')
@@ -91,7 +91,7 @@ class ConversationController {
         _id: req.params.id,
         user: req.user.id
       })
-      .populate('lead', 'name email company phone position')
+      .populate('lead', 'name email company phone position taxId address')
       .populate('instance', 'instanceName phoneNumber')
       .populate('assignedTeamMember', 'name roleLabel'); // <--- Adicione esta linha
 
@@ -151,7 +151,7 @@ class ConversationController {
         { unreadCount: 0, lastReadAt: new Date() },
         { new: true }
       )
-      .populate('lead', 'name email company phone position')
+      .populate('lead', 'name email company phone position taxId address')
       .populate('instance', 'instanceName phoneNumber');
 
       if (!conversation) {
