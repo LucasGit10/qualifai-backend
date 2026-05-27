@@ -12,12 +12,13 @@ class LeadLifecycleService {
     // logger.info('[CRON] Iniciando verificação de leads inativos para todos os usuários...');
 
     try {
-      const users = await User.find({}).select('_id').lean();
+      const users = await User.find({}).select('_id settings').lean();
       const userIds = users.map(user => user._id);
       
       let totalLeadsUpdated = 0;
 
-      for (const userId of userIds) {
+      for (const user of users) {
+        const userId = user._id;
         // 2. NOVA LÓGICA: Buscar leads que estão em follow-up ativo
         // Primeiro, encontramos todas as conversas daquele usuário que têm uma próxima tentativa de follow-up agendada no futuro.
         const activeFollowUpConversations = await Conversation.find({
@@ -31,7 +32,9 @@ class LeadLifecycleService {
         const inactivityThreshold = new Date();
         inactivityThreshold.setSeconds(inactivityThreshold.getSeconds() - INACTIVITY_PERIOD_SECONDS);
         
-        const ignoredStatuses = ['frio', 'convertido', 'dispensou_ligacao', 'novo'];
+        const customStatuses = user.settings?.debtorStatuses || [];
+        const defaultDebtorStatuses = ['em_negociacao', 'acordado', 'contatado'];
+        const ignoredStatuses = ['frio', 'convertido', 'dispensou_ligacao', 'novo', ...defaultDebtorStatuses, ...customStatuses];
 
         // 3. NOVA LÓGICA: Arquivar quem já quitou e mudar status de quem não respondeu
         

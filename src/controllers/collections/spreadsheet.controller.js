@@ -419,6 +419,7 @@ class SpreadsheetController {
         const currentDebtorKeys = new Set(records.map(getDebtorImportKeyFromRow).filter(Boolean));
         const chargeOccurrences = new Map();
         const leadsToCreate = [];
+        const leadsToUpdateMap = new Map();
         const debtBulkOps   = [];
         const seenChargeKeys = new Set();
 
@@ -460,6 +461,29 @@ class SpreadsheetController {
               if (docNorm) leadByTaxId.set(docNorm, newLead);
               if (generatedEmail) leadByEmail.set(generatedEmail, newLead);
               lead = newLead;
+            } else {
+              let leadUpdated = false;
+              if (!lead.contacts) lead.contacts = [];
+              
+              const addContact = (type, val, label) => {
+                if (val && !lead.contacts.some(c => c.value === val)) {
+                  lead.contacts.push({ type, value: val, label });
+                  leadUpdated = true;
+                }
+              };
+              
+              const p1 = normalizePhone(col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'));
+              const p2 = normalizePhone(col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'));
+              
+              if (p1) addContact('phone', p1, 'Telefone 1 (Planilha)');
+              if (p2) addContact('phone', p2, 'Telefone 2 (Planilha)');
+              if (emailInput && /^\S+@\S+\.\S+$/.test(emailInput)) addContact('email', emailInput.toLowerCase(), 'E-mail (Planilha)');
+
+              if (leadUpdated) {
+                if (!leadsToCreate.some(l => l._id === lead._id)) {
+                  leadsToUpdateMap.set(String(lead._id), lead);
+                }
+              }
             }
 
             const esp       = col(row, 'Esp', 'ESP') || null;
@@ -586,6 +610,22 @@ class SpreadsheetController {
         const BATCH = 500;
         for (let b = 0; b < debtBulkOps.length; b += BATCH) {
           await InadimplenciaDetalhe.bulkWrite(debtBulkOps.slice(b, b + BATCH), { ordered: false });
+        }
+
+        if (leadsToUpdateMap.size > 0) {
+          const updateOps = [];
+          for (const l of leadsToUpdateMap.values()) {
+            updateOps.push({
+              updateOne: {
+                filter: { _id: l._id },
+                update: { $set: { contacts: l.contacts } }
+              }
+            });
+          }
+          if (updateOps.length > 0) {
+            await Lead.bulkWrite(updateOps, { ordered: false });
+            logger.info(`[importGeneric] Adicionou contatos novos em ${updateOps.length} leads existentes.`);
+          }
         }
 
         // ── PASSO 5: Marca devedores que saíram ────────────────────────────────────────

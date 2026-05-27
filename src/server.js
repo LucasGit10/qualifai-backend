@@ -225,6 +225,101 @@ app.use('/api/demo',     demoRoutes);
 app.use('/api/blog',     blogRoutes);
 
 app.get('/health', (req, res) => {
+
+// Inicializa o Socket.io via Hub (evita dependência circular)
+const io = socketHub.init(server);
+app.set('io', io);
+const wss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+    try {
+        const url = new URL(request.url, `http://${request.headers.host}`);
+        if (url.pathname === '/twilio-stream') {
+            wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
+        } else {
+            socket.destroy();
+        }
+    } catch (error) {
+        logger.error('Error during WebSocket upgrade:', error);
+        socket.destroy();
+    }
+});
+
+wss.on('connection', (ws, request) => {
+  logger.info('New Twilio WebSocket connection established.');
+  handleVoiceConnection(ws, io);
+});
+// Exportação removida para usar socketHub.getIO() nos serviços
+module.exports = { app, server };
+
+io.on('connection', (socket) => {
+  logger.info(`[Socket] Novo cliente conectado: ${socket.id}`);
+  socket.on('join-room', (room) => {
+    logger.info(`[Socket] Cliente ${socket.id} entrou na sala: ${room}`);
+    socket.join(room);
+  });
+  socket.on('disconnect', (reason) => {
+    logger.info(`[Socket] Cliente ${socket.id} desconectado. Motivo: ${reason}`);
+  });
+});
+
+if (process.env.USE_MOCK_DATA === 'true') {
+  logger.info('🚀 Mock Mode Enabled: Skipping real DB connection');
+} else {
+  connectDB().then(() => {
+    if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
+      autoSeed();
+    }
+  });
+}
+
+// ── AI ────────────────────────────────────────────────────────────────────────
+app.use('/api/ai',          aiRoutes);
+app.use('/api/ai-training', aiTrainingRoutes);
+app.use('/api/landing-ai',  landingAIRouter);
+app.use('/api/voice-agent', voiceAgentRoutes);
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+app.use('/api/auth',    authRoutes);
+app.use('/api/admin',   adminRoutes);
+app.use('/api/manager', managerRoutes);
+
+// ── Collections ───────────────────────────────────────────────────────────────
+app.use('/api/debts',        debtRoutes);
+app.use('/api/leads',        leadRoutes);
+app.use('/api/campaigns',    campaignRoutes);
+app.use('/api/kanban',       kanbanRoutes);
+app.use('/api/spreadsheets', spreadsheetRoutes);
+
+// ── Conversations ─────────────────────────────────────────────────────────────
+app.use('/api/conversations',    conversationRoutes);
+app.use('/api/whatsapp-ai',      whatsAppAiRoutes);
+app.use('/api/whatsapp',         whatsappRoute);
+app.use('/api/instagram',        instagramRoutes);
+app.use('/api/template-message', messageTemplate);
+app.use('/api/zapi',             zapiRoutes);
+
+// ── Integrations ──────────────────────────────────────────────────────────────
+app.use('/api/integrations', integrationRoutes);
+app.use('/api/evolution',    evolutionRoutes);
+app.use('/api/lusha',        lushaRoutes);
+
+// ── Platform ──────────────────────────────────────────────────────────────────
+app.use('/api/dashboard',      dashboardRoutes);
+app.use('/api/calendar',       calendarRoutes);
+app.use('/api/meetings',       meetingRoutes);
+app.use('/api/notifications',  notificationRoutes);
+app.use('/api/ranking',        rankingRoutes);
+app.use('/api/reports',        performanceReportRoutes);
+app.use('/api/support',        supportRoutes);
+app.use('/api/webhooks',       webhookRoutes);
+
+// ── Billing ───────────────────────────────────────────────────────────────────
+app.use('/api/payments', paymentRoutes);
+app.use('/api/demo',     demoRoutes);
+app.use('/api/blog',     blogRoutes);
+
+app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
@@ -241,9 +336,10 @@ cron.schedule('0 8 * * *', () => {
   performanceReportService.generateAndSendReports();
 }, { scheduled: true, timezone: "America/Sao_Paulo" });
 
-cron.schedule(isDev ? '*/10 * * * *' : '*/10 * * * * *', () => {
-  leadLifecycleService.processInactiveLeads();
-}, { scheduled: true, timezone: "America/Sao_Paulo" });
+// Desativado a pedido do usuário
+// cron.schedule(isDev ? '*/10 * * * *' : '*/10 * * * * *', () => {
+//   leadLifecycleService.processInactiveLeads();
+// }, { scheduled: true, timezone: "America/Sao_Paulo" });
 
 // Rotina de Cobrança (Diária às 09:00)
 cron.schedule('0 9 * * *', () => {
