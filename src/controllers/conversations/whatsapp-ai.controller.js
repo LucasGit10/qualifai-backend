@@ -233,7 +233,6 @@ class WhatsAppAIController {
     } catch (error) {
 	      logger.error('Erro ao iniciar conversa com template:', error);
 	      if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
-	      if (error.name === 'ValidationError') return res.status(400).json({ message: 'Dados invalidos para iniciar a conversa.', details: error.message });
 	      res.status(500).json({ message: 'Erro interno do servidor', details: error.message });
     }
   }
@@ -520,7 +519,6 @@ class WhatsAppAIController {
         });
     } catch (error) {
         logger.error('Erro geral ao iniciar múltiplas conversas com template:', error);
-        if (error.name === 'ValidationError') return res.status(400).json({ message: 'Dados invalidos para iniciar as conversas.', details: error.message });
         res.status(500).json({ message: 'Erro interno do servidor' });
     }
   }
