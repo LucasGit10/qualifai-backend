@@ -157,7 +157,7 @@ const leadSchema = new mongoose.Schema({
   nextAction: {
     type: {
       type: String,
-      enum: ['initial_contact', 'followup'],
+      enum: [null, 'initial_contact', 'followup'],
       default: null
     },
     scheduledAt: Date,
@@ -182,7 +182,7 @@ const leadSchema = new mongoose.Schema({
     },
     status: {
       type: String,
-      enum: ['scheduled', 'sent', 'cancelled', 'failed'],
+      enum: [null, 'scheduled', 'sent', 'cancelled', 'failed'],
       default: null
     },
     conversation: {
