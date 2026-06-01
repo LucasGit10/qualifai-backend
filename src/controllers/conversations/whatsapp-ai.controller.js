@@ -11,6 +11,7 @@ const oneSignalService = require('../../services/oneSignalService');
 const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
 const { findReusableConversation, touchOutboundConversation } = require('../../services/conversationReuseService');
 const logger = require('../../utils/logger');
+const mongoose = require('mongoose');
 
 const isAiUnavailableResult = (result) =>
   result?.aiUnavailable === true || result?.action === 'disable_ai';
@@ -28,6 +29,11 @@ const resolveConversationOwner = async (userId, { conversationOwnerType, teamMem
   if (conversationOwnerType === 'teamMember' || teamMemberId) {
     if (!teamMemberId) {
       const error = new Error('Selecione o perfil que vai iniciar a conversa.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!mongoose.Types.ObjectId.isValid(teamMemberId)) {
+      const error = new Error('Perfil de atendimento invalido.');
       error.statusCode = 400;
       throw error;
     }
@@ -54,7 +60,8 @@ const resolveConversationOwner = async (userId, { conversationOwnerType, teamMem
 const buildTemplateComponents = (template, lead, mediaUrl = null, userSettings = {}) => {
   const components = [];
 
-  template.components.forEach(component => {
+  (template.components || []).forEach(component => {
+    if (!component?.type) return;
     const componentType = component.type.toLowerCase();
     
     // 1. Tratamento de Cabeçalho de Mídia (Imagem, Vídeo, Documento)

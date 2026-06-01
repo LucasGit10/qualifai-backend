@@ -19,6 +19,9 @@ const zapiService = require('../../services/zapiService');
 const MessageTemplate = getModel('MessageTemplate');
 const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
 
+const getWhatsAppProvider = (userSettings = {}) =>
+    userSettings?.integrations?.whatsappProvider || 'whatsapp';
+
 const isAiUnavailableResult = (result) =>
     result?.aiUnavailable === true || result?.action === 'disable_ai';
 
@@ -77,7 +80,8 @@ const syncWithEnabledIntegrations = async (lead, conversation, user) => {
 const buildTemplateComponents = (template, lead, userSettings = {}) => {
   const components = [];
 
-  template.components.forEach(component => {
+  (template.components || []).forEach(component => {
+    if (!component?.type) return;
     const componentPayload = { type: component.type.toLowerCase() };
     const parameters = [];
 
@@ -109,8 +113,11 @@ class AIController {
     try {
       const { leadId, channel, instanceId, templateId } = req.body;
       const userId = req.user.id;
+      const user = await User.findById(userId);
+      if (!user) return res.status(404).json({ message: 'Usuario nao encontrado' });
+      const whatsappProvider = getWhatsAppProvider(user.settings);
 
-      if (channel === 'whatsapp' && (!instanceId || !templateId)) {
+      if (channel === 'whatsapp' && whatsappProvider === 'whatsapp' && (!instanceId || !templateId)) {
         return res.status(400).json({ message: 'O ID da instância e do template são obrigatórios.' });
       }
 
@@ -122,21 +129,39 @@ class AIController {
         return res.status(409).json({ message: `Já existe uma conversa ativa para o lead '${lead.name}'.`, conversationId: existingConversation._id });
       }
 
-      const activeInstance = await WhatsappInstance.findOne({ _id: instanceId, user: userId, status: 'connected' });
-      if (!activeInstance) return res.status(404).json({ message: 'Instância do WhatsApp não encontrada ou não conectada.' });
-      
-      const messageTemplate = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
-      if (!messageTemplate) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
+      let activeInstance = null;
+      let messageTemplate = null;
+      let components = [];
+      let outboundMessage;
 
-      const user = await User.findById(userId);
-      const components = buildTemplateComponents(messageTemplate, lead, user);
+      if (channel === 'whatsapp' && whatsappProvider === 'whatsapp') {
+        activeInstance = await WhatsappInstance.findOne({ _id: instanceId, user: userId, status: 'connected' });
+        if (!activeInstance) return res.status(404).json({ message: 'Instância do WhatsApp não encontrada ou não conectada.' });
+      
+        messageTemplate = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
+        if (!messageTemplate) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
+
+        components = buildTemplateComponents(messageTemplate, lead, user);
+        outboundMessage = {
+          type: 'template',
+          templateName: messageTemplate.name,
+          templateLanguage: messageTemplate.language,
+          components,
+          content: `Template "${messageTemplate.name}" enviado.`
+        };
+      } else {
+        outboundMessage = {
+          type: 'text',
+          content: `Ola ${lead.name || 'tudo bem'}! Aqui e da QualifAI. Podemos conversar por aqui?`
+        };
+      }
       
       const conversation = new Conversation({
         lead: leadId,
         channel,
         user: userId,
-        instance: activeInstance._id,
-        messages: [{ role: 'ai', content: `Template "${messageTemplate.name}" enviado.`, channel }]
+        ...(activeInstance && { instance: activeInstance._id }),
+        messages: [{ role: 'ai', content: outboundMessage.content, channel }]
       });
       await conversation.save();
 
@@ -146,13 +171,7 @@ class AIController {
 
       await this.sendMessageToChannel(
         lead,
-        {
-          type: 'template',
-          templateName: messageTemplate.name,
-          templateLanguage: messageTemplate.language,
-          components: components,
-          content: `Template "${messageTemplate.name}" enviado.`,
-        },
+        outboundMessage,
         channel,
         user.settings,
         activeInstance
@@ -162,6 +181,7 @@ class AIController {
       res.json({ success: true, conversation });
     } catch (error) {
       logger.error('Erro ao iniciar conversa:', error);
+      if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
       res.status(500).json({ message: 'Erro interno do servidor' });
     }
   }
@@ -434,6 +454,7 @@ class AIController {
 
     } catch (error) {
         logger.error('❌ Erro ao processar resposta do lead:', error);
+        if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
         res.status(500).json({ message: 'Erro interno do servidor' });
     }
   }
@@ -532,10 +553,11 @@ class AIController {
               await whatsappService.sendTextMessage(instance, lead.phone, messagePayload.content);
             }
           } else if (provider === 'zapi') {
-            const zapiConfig = userSettings.integrations.zapi;
+            const zapiConfig = userSettings?.integrations?.zapi || {};
             if (!zapiConfig?.enabled || !zapiConfig.instanceId || !zapiConfig.token) {
-              logger.warn(`⚠️ Z-API não configurada ou desativada para o usuário.${zapiConfig.instanceId} ${zapiConfig.token}`);
-              return;
+              const zapiConfigError = new Error('Z-API nao configurada ou desativada para este usuario.');
+              zapiConfigError.statusCode = 400;
+              throw zapiConfigError;
             }
             if (messagePayload.type === 'audio') {
               await zapiService.sendAudioMessage(zapiConfig.instanceId, zapiConfig.token, lead.phone, messagePayload.buffer);
@@ -563,17 +585,24 @@ class AIController {
     try {
         const { leadIds, channel, instanceId, templateId } = req.body;
         const userId = req.user.id;
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ message: 'Usuario nao encontrado' });
+        const whatsappProvider = getWhatsAppProvider(user.settings);
         
-        if (channel === 'whatsapp' && (!instanceId || !templateId)) {
+        if (channel === 'whatsapp' && whatsappProvider === 'whatsapp' && (!instanceId || !templateId)) {
           return res.status(400).json({ message: 'Para disparo em massa no WhatsApp, o ID da instância e do template são obrigatórios.' });
         }
 
-        const user = await User.findById(userId);
-        const activeInstance = await WhatsappInstance.findOne({ _id: instanceId, user: userId, status: 'connected' });
-        if (!activeInstance) return res.status(404).json({ message: 'Instância do WhatsApp não encontrada ou não conectada.' });
+        let activeInstance = null;
+        let messageTemplate = null;
+        if (channel === 'whatsapp' && whatsappProvider === 'whatsapp') {
+          activeInstance = await WhatsappInstance.findOne({ _id: instanceId, user: userId, status: 'connected' });
+          if (!activeInstance) return res.status(404).json({ message: 'Instância do WhatsApp não encontrada ou não conectada.' });
         
-        const messageTemplate = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
-        if (!messageTemplate) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
+          messageTemplate = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
+          if (!messageTemplate) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
+
+        }
 
         let successCount = 0;
         let errorCount = 0;
@@ -591,14 +620,26 @@ class AIController {
                     return { status: 'error', reason: `Lead ${lead.name} já possui uma conversa ativa.` };
                 }
 
-                const components = buildTemplateComponents(messageTemplate, lead, user);
+                const components = messageTemplate ? buildTemplateComponents(messageTemplate, lead, user) : [];
+                const outboundMessage = messageTemplate
+                  ? {
+                      type: 'template',
+                      templateName: messageTemplate.name,
+                      templateLanguage: messageTemplate.language,
+                      components,
+                      content: `Template "${messageTemplate.name}" enviado.`
+                    }
+                  : {
+                      type: 'text',
+                      content: `Ola ${lead.name || 'tudo bem'}! Aqui e da QualifAI. Podemos conversar por aqui?`
+                    };
 
                 const conversation = new Conversation({
                     lead: leadId,
                     channel,
                     user: userId,
-                    instance: activeInstance._id,
-                    messages: [{ role: 'ai', content: `Template "${messageTemplate.name}" enviado.`, channel }]
+                    ...(activeInstance && { instance: activeInstance._id }),
+                    messages: [{ role: 'ai', content: outboundMessage.content, channel }]
                 });
                 await conversation.save();
 
@@ -608,12 +649,7 @@ class AIController {
 
                 await this.sendMessageToChannel(
                   lead, 
-                  { 
-                    type: 'template', 
-                    templateName: messageTemplate.name,
-                    templateLanguage: messageTemplate.language,
-                    components 
-                  },
+                  outboundMessage,
                   channel, 
                   user.settings, 
                   activeInstance
@@ -646,6 +682,7 @@ class AIController {
         });
     } catch (error) {
         logger.error('Erro geral ao iniciar múltiplas conversas:', error);
+        if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
         res.status(500).json({ message: 'Erro interno do servidor' });
     }
   }
