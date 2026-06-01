@@ -2,6 +2,32 @@ const { getModel } = require('../utils/modelProvider');
 const mongoose = require('mongoose');
 const Conversation = getModel('Conversation');
 
+const ROLE_MAP = {
+  ai: 'ai',
+  assistant: 'ai',
+  bot: 'ai',
+  human: 'human',
+  agent: 'human',
+  operator: 'human',
+  atendente: 'human',
+  lead: 'lead',
+  user: 'lead',
+  cliente: 'lead',
+  customer: 'lead',
+  system: 'system'
+};
+
+const normalizeMessage = (message = {}, fallbackChannel = 'whatsapp') => ({
+  role: ROLE_MAP[String(message.role || '').toLowerCase()] || 'system',
+  content: String(message.content || message.text || '[Mensagem sem conteudo]'),
+  timestamp: message.timestamp || message.createdAt || new Date(),
+  channel: message.channel || fallbackChannel || 'whatsapp',
+  metadata: message.metadata || {}
+});
+
+const normalizeMessages = (messages = [], fallbackChannel) =>
+  (messages || []).map(message => normalizeMessage(message, fallbackChannel));
+
 const openConversationFilter = ({ userId, leadId, channel }) => ({
   user: userId,
   lead: leadId,
@@ -22,9 +48,12 @@ const getLatestDate = (...dates) => {
 async function consolidateGroup(conversations) {
   if (!conversations.length) return null;
   const [primary, ...duplicates] = conversations;
+  primary.messages = normalizeMessages(primary.messages, primary.channel);
   if (!duplicates.length) return primary;
 
-  const duplicateMessages = duplicates.flatMap(conversation => conversation.messages || []);
+  const duplicateMessages = duplicates.flatMap(conversation =>
+    normalizeMessages(conversation.messages, conversation.channel || primary.channel)
+  );
   primary.messages = [...(primary.messages || []), ...duplicateMessages]
     .sort((a, b) => new Date(a.timestamp || a.createdAt || 0) - new Date(b.timestamp || b.createdAt || 0));
 
@@ -78,6 +107,8 @@ async function consolidateOpenDuplicatesForUser(userId) {
 }
 
 const touchOutboundConversation = (conversation, { message, channel, instanceId, ownerFields } = {}) => {
+  conversation.messages = normalizeMessages(conversation.messages, channel || conversation.channel);
+
   if (instanceId && !conversation.instance) {
     conversation.instance = instanceId;
   }
