@@ -1,6 +1,19 @@
 const { getModel } = require('../utils/modelProvider');
 const mongoose = require('mongoose');
 const Conversation = getModel('Conversation');
+
+const VALID_CHANNELS = ['email', 'whatsapp', 'chat', 'linkedin', 'voice'];
+
+// Corrige apenas o campo channel de mensagens vindas do banco que possam ter valores legados inválidos.
+// Não reconstrói o objeto para preservar _id e demais campos do Mongoose.
+const sanitizeMessages = (messages = [], fallbackChannel = 'whatsapp') => {
+  for (const msg of messages) {
+    if (!VALID_CHANNELS.includes(msg.channel)) {
+      msg.channel = VALID_CHANNELS.includes(fallbackChannel) ? fallbackChannel : 'whatsapp';
+    }
+  }
+  return messages;
+};
 const openConversationFilter = ({ userId, leadId, channel }) => ({
   user: userId,
   lead: leadId,
@@ -21,9 +34,13 @@ const getLatestDate = (...dates) => {
 async function consolidateGroup(conversations) {
   if (!conversations.length) return null;
   const [primary, ...duplicates] = conversations;
+  sanitizeMessages(primary.messages, primary.channel);
   if (!duplicates.length) return primary;
 
-  const duplicateMessages = duplicates.flatMap(conversation => conversation.messages || []);
+  const duplicateMessages = duplicates.flatMap(conversation => {
+    sanitizeMessages(conversation.messages, conversation.channel || primary.channel);
+    return conversation.messages || [];
+  });
   primary.messages = [...(primary.messages || []), ...duplicateMessages]
     .sort((a, b) => new Date(a.timestamp || a.createdAt || 0) - new Date(b.timestamp || b.createdAt || 0));
 
@@ -77,6 +94,9 @@ async function consolidateOpenDuplicatesForUser(userId) {
 }
 
 const touchOutboundConversation = (conversation, { message, channel, instanceId, ownerFields } = {}) => {
+  // Garante que mensagens existentes no objeto não tenham channel inválido antes do save
+  sanitizeMessages(conversation.messages, channel || conversation.channel);
+
   if (instanceId && !conversation.instance) {
     conversation.instance = instanceId;
   }
