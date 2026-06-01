@@ -17,13 +17,28 @@ const ROLE_MAP = {
   system: 'system'
 };
 
-const normalizeMessage = (message = {}, fallbackChannel = 'whatsapp') => ({
-  role: ROLE_MAP[String(message.role || '').toLowerCase()] || 'system',
-  content: String(message.content || message.text || '[Mensagem sem conteudo]'),
-  timestamp: message.timestamp || message.createdAt || new Date(),
-  channel: message.channel || fallbackChannel || 'whatsapp',
-  metadata: message.metadata || {}
-});
+const VALID_CHANNELS = ['email', 'whatsapp', 'chat', 'linkedin', 'voice'];
+
+const normalizeMessage = (message = {}, fallbackChannel = 'whatsapp') => {
+  let channel = message.channel || fallbackChannel || 'whatsapp';
+  if (!VALID_CHANNELS.includes(channel)) {
+    channel = 'whatsapp';
+  }
+  
+  const normalized = {
+    role: ROLE_MAP[String(message.role || '').toLowerCase()] || 'system',
+    content: String(message.content || message.text || '[Mensagem sem conteudo]'),
+    timestamp: message.timestamp || message.createdAt || new Date(),
+    channel: channel,
+    metadata: message.metadata || {}
+  };
+  
+  if (message._id) {
+    normalized._id = message._id;
+  }
+  
+  return normalized;
+};
 
 const normalizeMessages = (messages = [], fallbackChannel) =>
   (messages || []).map(message => normalizeMessage(message, fallbackChannel));
