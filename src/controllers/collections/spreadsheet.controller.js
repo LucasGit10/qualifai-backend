@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const csvParser = require('csv-parser');
 const xlsx = require('xlsx');
+const mongoose = require('mongoose');
 const { getModel } = require('../../utils/modelProvider');
 const logger = require('../../utils/logger');
 
@@ -24,6 +25,8 @@ const User = getModel('User');
 const SpcRecord = getModel('SpcRecord');
 const ContasReceber = getModel('ContasReceber');
 const InadimplenciaDetalhe = getModel('InadimplenciaDetalhe');
+const Conversation = getModel('Conversation');
+const MessageTemplate = getModel('MessageTemplate');
 
 // â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -919,6 +922,40 @@ class SpreadsheetController {
         },
         { $unwind: { path: "$leadInfo", preserveNullAndEmptyArrays: true } },
         {
+          $lookup: {
+            from: 'conversations',
+            let: { leadId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ['$lead', '$$leadId'] },
+                      { $eq: ['$user', uid] },
+                      { $eq: ['$status', 'active'] }
+                    ]
+                  }
+                }
+              },
+              { $sort: { lastMessageAt: -1, updatedAt: -1 } },
+              {
+                $project: {
+                  _id: 1,
+                  channel: 1,
+                  aiEnabled: 1,
+                  followup: 1,
+                  lastMessageAt: 1,
+                  lastInboundMessageAt: 1,
+                  lastOutboundMessageAt: 1
+                }
+              },
+              { $limit: 1 }
+            ],
+            as: 'activeConversation'
+          }
+        },
+        { $unwind: { path: "$activeConversation", preserveNullAndEmptyArrays: true } },
+        {
           $project: {
             _id: 1,
             cliente: 1,
@@ -941,7 +978,10 @@ class SpreadsheetController {
             manualReportStatus: "$leadInfo.manualReportStatus",
             debtorNotes: { $ifNull: ["$leadInfo.debtorNotes", []] },
             tags: "$leadInfo.tags",
-            contacts: "$leadInfo.contacts"
+            contacts: "$leadInfo.contacts",
+            nextAction: "$leadInfo.nextAction",
+            nextFollowUp: "$leadInfo.nextFollowUp",
+            activeConversation: 1
           }
         },
         { $sort: { importStatus: 1, totalVencido: -1 } }
@@ -975,6 +1015,154 @@ class SpreadsheetController {
   }
 
   // â”€â”€ 5. Limpar Base de Dados do Usuário â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  async scheduleDebtorNextAction(req, res) {
+    try {
+      const userId = req.user.id;
+      const { leadId } = req.params;
+      const {
+        actionType = 'initial_contact',
+        scheduledAt,
+        channel = 'whatsapp',
+        message,
+        emailSubject,
+        templateId,
+        conversationId,
+        cancelIfReplied = true
+      } = req.body;
+
+      if (!mongoose.Types.ObjectId.isValid(leadId)) {
+        return res.status(400).json({ message: 'Devedor invalido.' });
+      }
+
+      const allowedTypes = ['initial_contact', 'followup'];
+      const allowedChannels = ['email', 'whatsapp', 'chat', 'linkedin', 'voice'];
+      if (!allowedTypes.includes(actionType)) {
+        return res.status(400).json({ message: 'Tipo de agendamento invalido.' });
+      }
+      if (!allowedChannels.includes(channel)) {
+        return res.status(400).json({ message: 'Canal de agendamento invalido.' });
+      }
+
+      const scheduleDate = new Date(scheduledAt);
+      if (Number.isNaN(scheduleDate.getTime())) {
+        return res.status(400).json({ message: 'Informe uma data e horario validos.' });
+      }
+      if (scheduleDate.getTime() < Date.now() - 30000) {
+        return res.status(400).json({ message: 'O agendamento precisa ser para um horario futuro.' });
+      }
+
+      const cleanMessage = String(message || '').trim();
+      if (!cleanMessage) {
+        return res.status(400).json({ message: 'Informe a mensagem que sera enviada.' });
+      }
+      if (cleanMessage.length > 2000) {
+        return res.status(400).json({ message: 'A mensagem deve ter no maximo 2000 caracteres.' });
+      }
+      const cleanSubject = String(emailSubject || '').trim();
+      if (channel === 'email' && !cleanSubject) {
+        return res.status(400).json({ message: 'Informe o assunto do email.' });
+      }
+      if (cleanSubject.length > 180) {
+        return res.status(400).json({ message: 'O assunto deve ter no maximo 180 caracteres.' });
+      }
+
+      const lead = await Lead.findOne({ _id: leadId, user: userId });
+      if (!lead) return res.status(404).json({ message: 'Devedor nao encontrado.' });
+      if (templateId) {
+        const template = await MessageTemplate.findOne({ _id: templateId, user: userId, templateType: 'email' }).select('_id');
+        if (!template) return res.status(404).json({ message: 'Template de email nao encontrado.' });
+      }
+
+      let conversation = null;
+      if (actionType === 'followup') {
+        const query = conversationId && mongoose.Types.ObjectId.isValid(conversationId)
+          ? { _id: conversationId, lead: leadId, user: userId }
+          : { lead: leadId, user: userId, channel, status: 'active' };
+
+        conversation = await Conversation.findOne(query).sort({ updatedAt: -1 });
+        if (!conversation) {
+          return res.status(400).json({ message: 'Crie uma conversa inicial antes de agendar um follow-up.' });
+        }
+
+        conversation.aiEnabled = true;
+        conversation.followup = {
+          ...(conversation.followup?.toObject?.() || conversation.followup || {}),
+          attempts: 0,
+          nextAttemptAt: scheduleDate,
+          message: cleanMessage,
+          cancelIfReplied: Boolean(cancelIfReplied),
+          scheduledAt: new Date(),
+          scheduledBy: userId,
+          source: 'manual'
+        };
+        conversation.messages.push({
+          role: 'system',
+          content: `[SISTEMA] Follow-up manual agendado para ${scheduleDate.toISOString()}.`,
+          channel: conversation.channel
+        });
+        await conversation.save();
+      }
+
+      lead.nextAction = {
+        type: actionType,
+        scheduledAt: scheduleDate,
+        channel: conversation?.channel || channel,
+        message: cleanMessage,
+        emailSubject: cleanSubject || undefined,
+        template: templateId || undefined,
+        status: 'scheduled',
+        conversation: conversation?._id,
+        cancelIfReplied: Boolean(cancelIfReplied),
+        createdAt: new Date(),
+        lastError: undefined
+      };
+      lead.nextFollowUp = scheduleDate;
+      await lead.save();
+
+      res.json({ success: true, nextAction: lead.nextAction, conversation });
+    } catch (e) {
+      logger.error('[scheduleDebtorNextAction] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
+
+  async cancelDebtorNextAction(req, res) {
+    try {
+      const userId = req.user.id;
+      const { leadId } = req.params;
+
+      const lead = await Lead.findOne({ _id: leadId, user: userId });
+      if (!lead) return res.status(404).json({ message: 'Devedor nao encontrado.' });
+
+      const actionConversation = lead.nextAction?.conversation;
+      if (actionConversation) {
+        await Conversation.updateOne(
+          { _id: actionConversation, user: userId },
+          {
+            $set: {
+              'followup.nextAttemptAt': null,
+              'followup.source': 'auto'
+            },
+            $unset: {
+              'followup.message': '',
+              'followup.scheduledAt': '',
+              'followup.scheduledBy': ''
+            }
+          }
+        );
+      }
+
+      lead.nextAction = undefined;
+      lead.nextFollowUp = undefined;
+      await lead.save();
+
+      res.json({ success: true });
+    } catch (e) {
+      logger.error('[cancelDebtorNextAction] Erro:', e);
+      res.status(500).json({ message: e.message });
+    }
+  }
+
   async updateDebtorReportStatus(req, res) {
     try {
       const userId = req.user.id;

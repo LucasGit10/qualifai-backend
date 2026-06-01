@@ -34,20 +34,45 @@ class FollowupService {
         // logger.info(`[DEBUG-SERVICE] Processando conversa ID: ${conversation._id}`);
         const { lead, user, instance } = conversation;
         const followupConfig = user?.settings?.aiConfig?.followup;
+        const manualMessage = typeof conversation.followup?.message === 'string'
+          ? conversation.followup.message.trim()
+          : '';
+        const isManualFollowup = Boolean(manualMessage);
 
         if (!lead || !user) {
             // logger.warn(`[DEBUG-SERVICE] Conversa ${conversation._id} ignorada: Lead ou Usuário não encontrado.`);
             continue;
         }
 
-        if (!followupConfig || !followupConfig.enabled) {
+        if (
+          isManualFollowup &&
+          conversation.followup.cancelIfReplied !== false &&
+          conversation.lastInboundMessageAt &&
+          conversation.followup.scheduledAt &&
+          new Date(conversation.lastInboundMessageAt) > new Date(conversation.followup.scheduledAt)
+        ) {
+          conversation.followup.nextAttemptAt = null;
+          conversation.followup.message = undefined;
+          if (lead.nextAction?.status === 'scheduled') {
+            lead.nextAction.status = 'cancelled';
+            lead.nextAction.cancelledAt = new Date();
+            lead.nextFollowUp = undefined;
+            await lead.save();
+          }
+          await conversation.save();
+          continue;
+        }
+
+        if (!isManualFollowup && (!followupConfig || !followupConfig.enabled)) {
           // logger.warn(`[DEBUG-SERVICE] Conversa ${conversation._id} ignorada: Follow-up desabilitado para o usuário ${user.email}.`);
           conversation.followup.nextAttemptAt = null;
           await conversation.save();
           continue;
         }
 
-        if (conversation.followup.attempts >= followupConfig.maxAttempts) {
+        const maxAttempts = isManualFollowup ? 1 : followupConfig.maxAttempts;
+
+        if (conversation.followup.attempts >= maxAttempts) {
           // logger.warn(`[DEBUG-SERVICE] Conversa ${conversation._id} ignorada: Limite de ${followupConfig.maxAttempts} tentativas atingido.`);
           conversation.followup.nextAttemptAt = null;
           await conversation.save();
@@ -55,10 +80,12 @@ class FollowupService {
         }
 
         try {
-          const followupMessage = await aiService.generateFollowupMessage(
-            followupConfig.message,
-            lead.name
-          );
+          const followupMessage = isManualFollowup
+            ? manualMessage
+            : await aiService.generateFollowupMessage(
+                followupConfig.message,
+                lead.name
+              );
           
           // logger.info(`[DEBUG-SERVICE] TUDO CERTO! Enviando tentativa ${conversation.followup.attempts + 1} para o lead ${lead._id}. Mensagem: "${followupMessage}"`);
 
@@ -76,7 +103,17 @@ class FollowupService {
           const nextAttempt = new Date();
           let followupRescheduled = false;
 
-          if (followupConfig.waitUnit === 'days') {
+          if (isManualFollowup) {
+            conversation.followup.nextAttemptAt = null;
+            conversation.followup.message = undefined;
+            conversation.followup.source = 'auto';
+            if (lead.nextAction?.status === 'scheduled') {
+              lead.nextAction.status = 'sent';
+              lead.nextAction.sentAt = new Date();
+              lead.nextFollowUp = undefined;
+              await lead.save();
+            }
+          } else if (followupConfig.waitUnit === 'days') {
             nextAttempt.setDate(nextAttempt.getDate() + followupConfig.waitPeriod);
             followupRescheduled = true;
           } else if (followupConfig.waitUnit === 'hours') {
@@ -85,10 +122,10 @@ class FollowupService {
           }
           
           // Se a unidade for válida, reagenda. Se não, cancela futuros follow-ups.
-          if (followupRescheduled) {
+          if (!isManualFollowup && followupRescheduled) {
             conversation.followup.nextAttemptAt = nextAttempt;
             // logger.info(`[DEBUG-SERVICE] MENSAGEM ENVIADA para a conversa ${conversation._id}. Próxima tentativa agendada para ${nextAttempt.toISOString()}.`);
-          } else {
+          } else if (!isManualFollowup) {
             conversation.followup.nextAttemptAt = null; // Cancela o follow-up
             // logger.warn(`[DEBUG-SERVICE] Unidade de tempo inválida ('${followupConfig.waitUnit}'). Follow-ups para a conversa ${conversation._id} foram encerrados.`);
           }

@@ -4,6 +4,7 @@ const User = getModel('User');
 const Conversation = getModel('Conversation');
 const logger = require('../../utils/logger');
 const emailService = require('../../services/emailService');
+const { findReusableConversation, touchOutboundConversation } = require('../../services/conversationReuseService');
 const csvParser = require('csv-parser');
 const xlsx = require('xlsx');
 const pdf = require('pdf-parse');
@@ -279,11 +280,7 @@ class LeadController {
       const htmlBody = body.replace(/\n/g, '<br>');
       await emailService.sendEmail({ to: lead.email, subject, html: htmlBody, text: body }, user.settings);
       
-      let conversation = await Conversation.findOne({
-        lead: lead._id,
-        channel: 'email',
-        status: 'active'
-      });
+      let conversation = await findReusableConversation({ userId, leadId: lead._id, channel: 'email' });
 
       if (!conversation) {
         conversation = new Conversation({
@@ -294,10 +291,12 @@ class LeadController {
         });
       }
 
-      conversation.messages.push({
-        role: 'humano',
-        content: `[EMAIL ENVIADO]\nAssunto: ${subject}\n\n${body}`,
-        channel: 'email'
+      touchOutboundConversation(conversation, {
+        channel: 'email',
+        message: {
+          role: 'human',
+          content: `[EMAIL ENVIADO]\nAssunto: ${subject}\n\n${body}`
+        }
       });
       await conversation.save();
 

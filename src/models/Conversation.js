@@ -125,6 +125,25 @@ const conversationSchema = new mongoose.Schema({
     nextAttemptAt: {
       type: Date,
       default: null
+    },
+    message: {
+      type: String,
+      trim: true,
+      maxlength: 2000
+    },
+    cancelIfReplied: {
+      type: Boolean,
+      default: true
+    },
+    scheduledAt: Date,
+    scheduledBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    source: {
+      type: String,
+      enum: ['auto', 'manual'],
+      default: 'auto'
     }
   },
   negotiationIntelligence: {

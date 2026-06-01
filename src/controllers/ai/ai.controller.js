@@ -545,7 +545,7 @@ class AIController {
           }
           break;
         case 'email':
-          if (lead.email) await emailService.sendEmail({ to: lead.email, subject: 'Resposta da QualifAI', html: messagePayload.content }, userSettings);
+          if (lead.email) await emailService.sendEmail({ to: lead.email, subject: messagePayload.subject || 'Resposta da QualifAI', html: messagePayload.content }, userSettings);
           break;
         case 'chat':
           break;

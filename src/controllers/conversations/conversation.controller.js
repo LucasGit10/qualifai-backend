@@ -4,6 +4,7 @@ const Conversation = getModel('Conversation');
 const Lead = getModel('Lead');
 const WhatsAppInstance = getModel('WhatsAppInstance');
 const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
+const { consolidateOpenDuplicatesForUser } = require('../../services/conversationReuseService');
 const logger = require('../../utils/logger');
 
 class ConversationController {
@@ -11,8 +12,10 @@ class ConversationController {
   // Dentro da função getConversations no ConversationController
   async getConversations(req, res) {
     try {
-	      const { page = 1, limit = 16, status, channel, owner = 'master', teamMemberId } = req.query;
+      const { page = 1, limit = 16, status, channel, owner = 'master', teamMemberId } = req.query;
       const userId = req.user.id;
+
+      await consolidateOpenDuplicatesForUser(userId);
 
 	      const filter = { user: userId };
 	      if (status) filter.status = status;

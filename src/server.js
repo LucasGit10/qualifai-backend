@@ -15,6 +15,7 @@ const connectDB = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
 const logger = require('./utils/logger');
 const followupService = require('./services/followupService');
+const nextActionService = require('./services/nextActionService');
 const campaignFollowupService = require('./services/campaignFollowupService');
 const performanceReportService = require('./services/performanceReportService');
 const leadLifecycleService = require('./services/leadLifecycleService');
@@ -234,6 +235,7 @@ const isDev = process.env.NODE_ENV === 'development' || process.env.USE_MOCK_DAT
 
 cron.schedule(isDev ? '*/5 * * * *' : '* * * * *', () => {
   followupService.checkAndSendFollowups();
+  nextActionService.processScheduledInitialContacts();
   campaignFollowupService.processCampaignFollowups();
 });
 

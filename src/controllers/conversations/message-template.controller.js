@@ -96,11 +96,17 @@ class MessageTemplateController {
 
   async create(req, res) {
     try {
-      const { name, category, language, components, templateType } = req.body;
+      const { name, category, language, components, templateType, emailSubject, emailPreheader } = req.body;
+      const finalTemplateType = templateType || 'conversation';
+      if (finalTemplateType === 'email' && !String(emailSubject || '').trim()) {
+        return res.status(400).json({ message: 'O assunto do email e obrigatorio.' });
+      }
       const newTemplate = new MessageTemplate({
         user: req.user.id, name, category, language, components, 
         status: 'draft',
-        templateType: templateType || 'conversation',
+        templateType: finalTemplateType,
+        emailSubject,
+        emailPreheader,
       });
       await newTemplate.save();
       res.status(201).json(newTemplate);
@@ -147,6 +153,9 @@ class MessageTemplateController {
 
       const template = await MessageTemplate.findOne({ _id: templateId, user: req.user.id });
       if (!template) return res.status(404).json({ message: 'Template nÃ£o encontrado.' });
+      if (template.templateType === 'email') {
+        return res.status(400).json({ message: 'Templates de email nao precisam de aprovacao da Meta.' });
+      }
       if (template.status !== 'draft' && template.status !== 'rejected') {
         return res.status(400).json({ message: 'Apenas templates em rascunho ou rejeitados podem ser enviados.' });
       }
@@ -175,7 +184,7 @@ class MessageTemplateController {
   async update(req, res) {
     try {
       const { templateId } = req.params;
-      const { name, category, language, components, templateType } = req.body;
+      const { name, category, language, components, templateType, emailSubject, emailPreheader } = req.body;
 
       const template = await MessageTemplate.findOne({ _id: templateId, user: req.user.id });
       if (!template) {
@@ -191,6 +200,8 @@ class MessageTemplateController {
       template.language = language;
       template.components = components;
       template.templateType = templateType ?? template.templateType;
+      template.emailSubject = emailSubject;
+      template.emailPreheader = emailPreheader;
 
       if (template.status === 'rejected') {
         template.status = 'draft';
@@ -238,6 +249,9 @@ class MessageTemplateController {
         const originalTemplate = await MessageTemplate.findOne({ _id: templateId, user: userId });
         if (!originalTemplate) {
             return res.status(404).json({ message: 'Template original nÃ£o encontrado.' });
+        }
+        if (originalTemplate.templateType === 'email') {
+            return res.status(400).json({ message: 'Templates de email nao precisam de reenvio para aprovacao.' });
         }
         const baseName = originalTemplate.name.split('_v')[0];
 

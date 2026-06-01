@@ -9,6 +9,7 @@ const aiService = require('../../services/aiService');
 const whatsappService = require('../../services/whatsappService');
 const oneSignalService = require('../../services/oneSignalService');
 const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
+const { findReusableConversation, touchOutboundConversation } = require('../../services/conversationReuseService');
 const logger = require('../../utils/logger');
 
 const isAiUnavailableResult = (result) =>
@@ -178,18 +179,27 @@ class WhatsAppAIController {
 	      const components = buildTemplateComponents(template, lead, finalMediaUrl, req.user);
 	      const ownerFields = await resolveConversationOwner(userId, { conversationOwnerType, teamMemberId });
 
-	      const conversation = new Conversation({
-	        lead: leadId,
-	        channel: 'whatsapp',
-	        user: userId,
-	        instance: instanceId,
-	        ...ownerFields,
-	        messages: [{
-          role: 'ai',
-          content: `Conversa iniciada com o template: ${template.name}`,
+	      let conversation = await findReusableConversation({ userId, leadId, channel: 'whatsapp' });
+        const isNewConversation = !conversation;
+        if (!conversation) {
+          conversation = new Conversation({
+            lead: leadId,
+            channel: 'whatsapp',
+            user: userId,
+            instance: instanceId,
+            ...ownerFields,
+            messages: []
+          });
+        }
+        touchOutboundConversation(conversation, {
           channel: 'whatsapp',
-        }]
-      });
+          instanceId,
+          ownerFields,
+          message: {
+            role: 'ai',
+            content: `Template "${template.name}" enviado.`
+          }
+        });
       await conversation.save();
 
       lead.status = 'contatado';
@@ -203,7 +213,7 @@ class WhatsAppAIController {
         components: components,
       }, instance, req.user.settings);
 
-      req.app.get('io').to(`user-${userId}`).emit('new_conversation', { conversation, lead });
+      req.app.get('io').to(`user-${userId}`).emit(isNewConversation ? 'new_conversation' : 'conversation_updated', { conversation, lead });
       
       oneSignalService.sendPushNotification(
         userId,
@@ -441,17 +451,25 @@ class WhatsAppAIController {
                     continue;
                 }
                 
-                const conversation = new Conversation({
-                    lead: leadId,
-	                    channel: 'whatsapp',
-	                    user: userId,
-	                    instance: instanceId,
-	                    ...ownerFields,
-	                    messages: [{
-                        role: 'ai',
-                        content: `Conversa iniciada com o template: ${template.name}`,
+                let conversation = await findReusableConversation({ userId, leadId, channel: 'whatsapp' });
+                if (!conversation) {
+                    conversation = new Conversation({
+                        lead: leadId,
                         channel: 'whatsapp',
-                    }]
+                        user: userId,
+                        instance: instanceId,
+                        ...ownerFields,
+                        messages: []
+                    });
+                }
+                touchOutboundConversation(conversation, {
+                    channel: 'whatsapp',
+                    instanceId,
+                    ownerFields,
+                    message: {
+                        role: 'ai',
+                        content: `Template "${template.name}" enviado.`
+                    }
                 });
                 await conversation.save();
                 

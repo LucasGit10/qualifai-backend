@@ -154,6 +154,50 @@ const leadSchema = new mongoose.Schema({
     default: Date.now
   },
   nextFollowUp: Date,
+  nextAction: {
+    type: {
+      type: String,
+      enum: ['initial_contact', 'followup'],
+      default: null
+    },
+    scheduledAt: Date,
+    channel: {
+      type: String,
+      enum: ['email', 'whatsapp', 'chat', 'linkedin', 'voice'],
+      default: 'whatsapp'
+    },
+    message: {
+      type: String,
+      trim: true,
+      maxlength: 2000
+    },
+    emailSubject: {
+      type: String,
+      trim: true,
+      maxlength: 180
+    },
+    template: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'MessageTemplate'
+    },
+    status: {
+      type: String,
+      enum: ['scheduled', 'sent', 'cancelled', 'failed'],
+      default: null
+    },
+    conversation: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Conversation'
+    },
+    cancelIfReplied: {
+      type: Boolean,
+      default: true
+    },
+    createdAt: Date,
+    sentAt: Date,
+    cancelledAt: Date,
+    lastError: String
+  },
   assignedTo: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
