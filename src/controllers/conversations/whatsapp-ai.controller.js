@@ -167,7 +167,7 @@ class WhatsAppAIController {
       const { leadId, instanceId, templateId, mediaUrl, imageUrl, conversationOwnerType, teamMemberId } = req.body;
       const userId = req.user.id;
 
-      logger.info(`[/whatsapp-ai/start] STEP 1 - Iniciando. userId=${userId} leadId=${leadId} instanceId=${instanceId} templateId=${templateId}`);
+      console.log(`[/whatsapp-ai/start] STEP 1 - Iniciando. userId=${userId} leadId=${leadId} instanceId=${instanceId} templateId=${templateId}`);
 
       let finalMediaUrl = mediaUrl || imageUrl;
 
@@ -177,26 +177,26 @@ class WhatsAppAIController {
 
       const lead = await Lead.findOne({ _id: leadId, user: userId });
       if (!lead) return res.status(404).json({ message: 'Lead não encontrado.' });
-      logger.info(`[/whatsapp-ai/start] STEP 2 - Lead encontrado: ${lead.name} (${lead._id})`);
+      console.log(`[/whatsapp-ai/start] STEP 2 - Lead encontrado: ${lead.name} (${lead._id})`);
 
       const instance = await WhatsAppInstance.findOne({ _id: instanceId, user: userId, status: 'connected' });
       if (!instance) return res.status(404).json({ message: 'Instância não encontrada ou desconectada.' });
-      logger.info(`[/whatsapp-ai/start] STEP 3 - Instância encontrada: ${instance.instanceName}`);
+      console.log(`[/whatsapp-ai/start] STEP 3 - Instância encontrada: ${instance.instanceName}`);
 
       const template = await MessageTemplate.findOne({ _id: templateId, user: userId, status: 'approved' });
       if (!template) return res.status(404).json({ message: 'Template não encontrado ou não aprovado.' });
-      logger.info(`[/whatsapp-ai/start] STEP 4 - Template encontrado: ${template.name}`);
+      console.log(`[/whatsapp-ai/start] STEP 4 - Template encontrado: ${template.name}`);
 
       if (!finalMediaUrl) finalMediaUrl = template.sampleMediaUrl;
       const components = buildTemplateComponents(template, lead, finalMediaUrl, req.user);
-      logger.info(`[/whatsapp-ai/start] STEP 5 - Components buildados: ${JSON.stringify(components)}`);
+      console.log(`[/whatsapp-ai/start] STEP 5 - Components buildados: ${JSON.stringify(components)}`);
 
       const ownerFields = await resolveConversationOwner(userId, { conversationOwnerType, teamMemberId });
-      logger.info(`[/whatsapp-ai/start] STEP 6 - Owner resolvido: ${JSON.stringify(ownerFields)}`);
+      console.log(`[/whatsapp-ai/start] STEP 6 - Owner resolvido: ${JSON.stringify(ownerFields)}`);
 
       let conversation = await findReusableConversation({ userId, leadId, channel: 'whatsapp' });
       const isNewConversation = !conversation;
-      logger.info(`[/whatsapp-ai/start] STEP 7 - findReusableConversation: isNew=${isNewConversation} convId=${conversation?._id}`);
+      console.log(`[/whatsapp-ai/start] STEP 7 - findReusableConversation: isNew=${isNewConversation} convId=${conversation?._id}`);
 
       if (!conversation) {
         conversation = new Conversation({
@@ -218,19 +218,19 @@ class WhatsAppAIController {
           content: `Template "${template.name}" enviado.`
         }
       });
-      logger.info(`[/whatsapp-ai/start] STEP 8 - touchOutboundConversation OK. Total msgs=${conversation.messages.length}`);
+      console.log(`[/whatsapp-ai/start] STEP 8 - touchOutboundConversation OK. Total msgs=${conversation.messages.length}`);
 
       // Log das mensagens para detectar channel inválido
       const channelsInMessages = conversation.messages.map(m => m.channel);
-      logger.info(`[/whatsapp-ai/start] STEP 8.1 - Channels das msgs: ${JSON.stringify(channelsInMessages)}`);
+      console.log(`[/whatsapp-ai/start] STEP 8.1 - Channels das msgs: ${JSON.stringify(channelsInMessages)}`);
 
       await conversation.save();
-      logger.info(`[/whatsapp-ai/start] STEP 9 - conversation.save() OK. convId=${conversation._id}`);
+      console.log(`[/whatsapp-ai/start] STEP 9 - conversation.save() OK. convId=${conversation._id}`);
 
       lead.status = 'contatado';
       lead.lastContact = new Date();
       await lead.save();
-      logger.info(`[/whatsapp-ai/start] STEP 10 - lead.save() OK`);
+      console.log(`[/whatsapp-ai/start] STEP 10 - lead.save() OK`);
 
       await this._sendMessageHelper(lead, {
         type: 'template',
@@ -238,7 +238,7 @@ class WhatsAppAIController {
         languageCode: template.language,
         components: components,
       }, instance, req.user.settings);
-      logger.info(`[/whatsapp-ai/start] STEP 11 - _sendMessageHelper OK`);
+      console.log(`[/whatsapp-ai/start] STEP 11 - _sendMessageHelper OK`);
 
       req.app.get('io').to(`user-${userId}`).emit(isNewConversation ? 'new_conversation' : 'conversation_updated', { conversation, lead });
 
@@ -249,13 +249,13 @@ class WhatsAppAIController {
         { type: 'whatsapp', link: `/app/conversations-whats?id=${conversation._id}` }
       );
 
-      logger.info(`[/whatsapp-ai/start] STEP 12 - Sucesso total. convId=${conversation._id}`);
+      console.log(`[/whatsapp-ai/start] STEP 12 - Sucesso total. convId=${conversation._id}`);
       res.status(200).json({ success: true, message: 'Conversa iniciada com sucesso via template.', conversation });
     } catch (error) {
-      logger.error(`[/whatsapp-ai/start] ERRO: name=${error.name} message=${error.message}`);
-      logger.error(`[/whatsapp-ai/start] STACK: ${error.stack}`);
+      console.error(`[/whatsapp-ai/start] ERRO: name=${error.name} message=${error.message}`);
+      console.error(`[/whatsapp-ai/start] STACK: ${error.stack}`);
       if (error.name === 'ValidationError') {
-        logger.error(`[/whatsapp-ai/start] ValidationError details: ${JSON.stringify(error.errors)}`);
+        console.error(`[/whatsapp-ai/start] ValidationError details: ${JSON.stringify(error.errors)}`);
       }
       if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
       res.status(500).json({ message: 'Erro interno do servidor', details: error.message });
