@@ -12,6 +12,7 @@ const zapiService = require('../services/zapiService');
 const logger = require('../utils/logger');
 const { startOfDay, endOfDay, subDays } = require('date-fns');
 const Conversation = getModel('Conversation');
+const AppError = require('../utils/AppError');
 
 class PerformanceReportService {
 
@@ -49,7 +50,7 @@ class PerformanceReportService {
   async generateAndSendManualReport(userId, frequency = 'daily') {
     const user = await User.findById(userId);
     if (!user || !user.settings?.performanceReport?.enabled) {
-        throw new Error('Relatórios de performance não estão habilitados para este usuário.');
+        throw new AppError('Relatórios de performance não estão habilitados para este usuário. Ative nas configurações de notificações.', 403, 'REPORT_NOT_ENABLED');
     }
     
     const { deliveryChannels, recipients } = user.settings.performanceReport;
@@ -211,7 +212,7 @@ class PerformanceReportService {
     const phone = recipient.whatsappNumber;
 
     if (!provider || !phone) {
-        throw new Error('Provedor de WhatsApp ou número do destinatário não configurado.');
+        throw new AppError('Provedor de WhatsApp ou número do destinatário do relatório não configurado. Configure nas opções de relatórios.', 422, 'REPORT_WHATSAPP_NOT_CONFIGURED');
     }
 
     if (provider === 'whatsapp') {
@@ -220,7 +221,7 @@ class PerformanceReportService {
       if (instance) {
         await whatsappService.sendTextMessage(instance, phone, textContent);
       } else {
-        throw new Error('Nenhuma instância do WhatsApp Oficial (Meta) conectada encontrada.');
+        throw new AppError('Nenhuma instância do WhatsApp Oficial (Meta) conectada para envio do relatório. Conecte uma instância nas configurações.', 503, 'NO_META_INSTANCE');
       }
     } else if (provider === 'zapi') {
         const { instanceId, token } = user.settings.integrations.zapi;
@@ -232,10 +233,10 @@ class PerformanceReportService {
         if(instance) {
             await evolutionApiService.sendMessage(instance.instanceName, phone, textContent);
         } else {
-            throw new Error('Nenhuma instância da Evolution API conectada encontrada.');
+            throw new AppError('Nenhuma instância da Evolution API conectada para envio do relatório. Conecte uma instância nas configurações.', 503, 'NO_EVOLUTION_INSTANCE');
         }
     } else {
-        throw new Error(`Provedor de WhatsApp '${provider}' não suportado para relatórios.`);
+        throw new AppError(`Provedor de WhatsApp '${provider}' não é suportado para envio de relatórios.`, 422, 'UNSUPPORTED_WHATSAPP_PROVIDER');
     }
 
     logger.info(`[PerformanceReport] WhatsApp report sent to ${phone} for user ${user.email} via ${provider}.`);

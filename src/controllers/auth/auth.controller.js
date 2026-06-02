@@ -6,6 +6,7 @@ const { validationResult } = require('express-validator');
 const { sendVerificationEmail } = require('../../utils/emailVerification');
 const { sendPasswordResetEmail } = require('../../utils/passwordResetEmail');
 const logger = require('../../utils/logger');
+const { handleControllerError } = require('../../utils/errorUtils');
 
 class AuthController {
   // Registro de usuário
@@ -75,8 +76,7 @@ class AuthController {
       });
 
     } catch (error) {
-      logger.error('Erro no registo:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao registrar usuário');
     }
   }
 
@@ -126,8 +126,7 @@ class AuthController {
       });
   
     } catch (error) {
-      logger.error('Erro no login:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao fazer login');
     }
   }
 
@@ -191,8 +190,7 @@ class AuthController {
 
       res.json({ success: true, message: 'Email de confirmação reenviado com sucesso' });
     } catch (error) {
-      logger.error('Erro no reenvio do email de confirmação:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao reenviar email de confirmação');
     }
   }
 
@@ -234,9 +232,7 @@ class AuthController {
       res.json({ success: true, message: 'Se o email existir, um link para recuperação será enviado.' });
 
     } catch (error) {
-      // DEBUG: Log de erro aprimorado
-      logger.error(`[Auth] Falha crítica em requestPasswordReset para o email: ${req.body.email}`, error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao solicitar recuperação de senha');
     }
   }
 
@@ -285,10 +281,8 @@ class AuthController {
       logger.info(`[Auth] Senha para o usuário ${user.email} (ID: ${user._id}) foi alterada com sucesso.`);
       res.json({ success: true, message: 'Senha alterada com sucesso.' });
 
-    } catch (error)      {
-      // DEBUG: Log de erro aprimorado
-      logger.error(`[Auth] Falha crítica em resetPassword:`, error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+    } catch (error) {
+      return handleControllerError(res, error, 'ao redefinir senha');
     }
   }
 
@@ -321,8 +315,7 @@ class AuthController {
       return res.json({ success: true, message: 'Conta excluída com sucesso.' });
 
     } catch (error) {
-      logger.error('Erro ao excluir conta:', error);
-      return res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao excluir conta');
     }
   }
 
@@ -332,8 +325,7 @@ class AuthController {
       const user = await User.findById(req.user.id);
       res.json({ user });
     } catch (error) {
-      logger.error('Erro ao buscar perfil:', error);
-      res.status(500).json({ message: 'Erro ao buscar perfil' });
+      return handleControllerError(res, error, 'ao buscar perfil');
     }
   }
 
@@ -361,12 +353,7 @@ class AuthController {
 
       res.json({ user: updatedUser }); // Retorna o usuário atualizado
     } catch (error) {
-      logger.error('Erro ao atualizar perfil:', error);
-      // Adiciona validação de erro do Mongoose
-      if (error.name === 'ValidationError') {
-        return res.status(400).json({ message: error.message, errors: error.errors });
-      }
-      res.status(500).json({ message: 'Erro ao atualizar perfil' });
+      return handleControllerError(res, error, 'ao atualizar perfil');
     }
   }
 
@@ -388,8 +375,7 @@ class AuthController {
       res.json({ theme });
 
     } catch (error) {
-      logger.error('Erro ao buscar preferência de tema do usuário:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao buscar tema do usuário');
     }
   }
   async updateUserTheme(req, res) {
@@ -417,8 +403,7 @@ class AuthController {
       res.json({ success: true, message: 'Tema atualizado com sucesso.', theme: user.settings.theme });
 
     } catch (error) {
-      logger.error('Erro ao atualizar preferência de tema do usuário:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao atualizar tema do usuário');
     }
   }
 
@@ -447,8 +432,7 @@ class AuthController {
       res.json({ success: true, message: 'Modo de visualização atualizado com sucesso.', view: user.settings.conversationView });
 
     } catch (error) {
-      logger.error('Erro ao atualizar o modo de visualização da conversa:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao atualizar modo de visualização');
     }
   }
 }

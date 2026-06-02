@@ -7,6 +7,7 @@ const aiController = require('../controllers/ai/ai.controller');
 const logger = require('../utils/logger');
 const socketHub = require('../utils/socketHub');
 const { findReusableConversation, touchOutboundConversation } = require('./conversationReuseService');
+const AppError = require('../utils/AppError');
 
 function renderTemplate(value = '', lead = {}) {
   const variables = {
@@ -50,15 +51,15 @@ class NextActionService {
 
     try {
       if (!user || !message) {
-        throw new Error('Lead sem usuario ou mensagem agendada.');
+        throw new AppError('Lead sem usuário associado ou sem mensagem agendada configurada.', 422, 'LEAD_NO_USER_OR_MESSAGE');
       }
 
       if (channel === 'whatsapp' && !lead.phone) {
-        throw new Error('Lead sem telefone para WhatsApp.');
+        throw new AppError(`Lead ${lead.name || lead._id} não possui número de telefone cadastrado para envio via WhatsApp.`, 422, 'LEAD_NO_PHONE');
       }
 
       if (channel === 'email' && !lead.email) {
-        throw new Error('Lead sem email para envio.');
+        throw new AppError(`Lead ${lead.name || lead._id} não possui endereço de e-mail cadastrado para envio.`, 422, 'LEAD_NO_EMAIL');
       }
 
       const provider = user.settings?.integrations?.whatsappProvider || 'whatsapp';
@@ -67,7 +68,7 @@ class NextActionService {
         : null;
 
       if (channel === 'whatsapp' && provider === 'whatsapp' && !instance) {
-        throw new Error('Nenhuma instancia de WhatsApp conectada.');
+        throw new AppError('Nenhuma instância do WhatsApp conectada para este usuário. Conecte uma instância nas configurações.', 503, 'NO_WHATSAPP_INSTANCE');
       }
 
       let conversation = await findReusableConversation({ userId: user._id, leadId: lead._id, channel });

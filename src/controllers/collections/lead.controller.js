@@ -10,6 +10,7 @@ const xlsx = require('xlsx');
 const pdf = require('pdf-parse');
 const fs = require('fs');
 const path = require('path');
+const { handleControllerError } = require('../../utils/errorUtils');
 
 const DEFAULT_DEBTOR_STATUSES = ['novo', 'contatado', 'em_negociacao', 'acordado', 'quitado'];
 const HIDDEN_DEBTOR_STATUSES = ['sem_resposta', 'arquivado'];
@@ -128,8 +129,7 @@ class LeadController {
         total
       });
     } catch (error) {
-      logger.error('Erro ao listar leads:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao listar leads');
     }
   }
 
@@ -144,8 +144,7 @@ class LeadController {
 
       res.json(leads);
     } catch (error) {
-      logger.error('Error fetching lead list:', error);
-      res.status(500).json({ message: 'Internal server error' });
+      return handleControllerError(res, error, 'ao listar leads (dropdown)');
     }
   }
 
@@ -156,8 +155,7 @@ class LeadController {
       if (!lead) return res.status(404).json({ message: 'Lead não encontrado' });
       res.json({ lead });
     } catch (error) {
-      logger.error('Erro ao buscar lead:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao buscar lead por ID');
     }
   }
 
@@ -180,8 +178,7 @@ class LeadController {
 
       res.status(201).json({ lead });
     } catch (error) {
-      logger.error('Erro ao criar lead:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao criar lead');
     }
   }
 
@@ -217,8 +214,7 @@ class LeadController {
 
       res.json({ lead: updatedLead });
     } catch (error) {
-      logger.error('Erro ao atualizar lead:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao atualizar lead');
     }
   }
 
@@ -229,8 +225,7 @@ class LeadController {
       if (!lead) return res.status(404).json({ message: 'Lead não encontrado' });
       res.json({ message: 'Lead excluído com sucesso' });
     } catch (error) {
-      logger.error('Erro ao excluir lead:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao excluir lead');
     }
   }
 
@@ -255,8 +250,7 @@ class LeadController {
 
       res.json({ message: `${result.deletedCount} leads foram excluídos com sucesso.` });
     } catch (error) {
-      logger.error('Erro ao excluir múltiplos leads:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao excluir múltiplos leads');
     }
   }
 
@@ -305,8 +299,7 @@ class LeadController {
 
       res.json({ success: true, message: 'Email enviado e registrado com sucesso.' });
     } catch (error) {
-      logger.error('Erro ao enviar email:', error);
-      res.status(500).json({ message: error.message || 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao enviar email para lead');
     }
   }
   // Importar leads em massa
@@ -332,8 +325,7 @@ class LeadController {
       }
       res.json({ success: true, created: createdLeads.length, errors: errors.length, details: errors });
     } catch (error) {
-      logger.error('Erro ao importar leads:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao importar leads em massa');
     }
   }
   
@@ -572,8 +564,7 @@ class LeadController {
 
         res.json({ success: true, message: `Sincronização concluída.`, results, activeIntegrations });
     } catch (error) {
-        logger.error('Erro ao sincronizar todos os leads:', error);
-        res.status(500).json({ message: 'Erro interno do servidor' });
+        return handleControllerError(res, error, 'ao sincronizar todos os leads');
     }
   }
 
@@ -589,8 +580,7 @@ class LeadController {
       ]);
       res.json(statuses);
     } catch (error) {
-      logger.error('Erro ao buscar lista de status:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao buscar status de leads');
     }
   }
 
@@ -613,8 +603,7 @@ class LeadController {
 
       res.status(201).json({ status, statuses });
     } catch (error) {
-      logger.error('Erro ao criar status de lead:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao criar status de lead');
     }
   }
 
@@ -629,8 +618,7 @@ class LeadController {
 
       res.json(tags);
     } catch (error) {
-      logger.error('Erro ao buscar tags de lead:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao buscar tags de lead');
     }
   }
 
@@ -651,8 +639,7 @@ class LeadController {
 
       res.status(201).json({ tag, tags });
     } catch (error) {
-      logger.error('Erro ao criar tag de lead:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao criar tag de lead');
     }
   }
 }

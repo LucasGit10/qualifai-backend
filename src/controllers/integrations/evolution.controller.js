@@ -4,6 +4,7 @@ const User = getModel('User');
 const WhatsAppInstance = getModel('WhatsAppInstance');
 const Conversation = getModel('Conversation');
 const logger = require('../../utils/logger');
+const { handleControllerError } = require('../../utils/errorUtils');
 
 class EvolutionController {
   // Listar todas as instâncias disponíveis (da Evolution API)
@@ -36,8 +37,7 @@ class EvolutionController {
       });
 
     } catch (error) {
-      logger.error('Erro ao listar instâncias disponíveis:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao listar instâncias da Evolution API');
     }
   }
 
@@ -130,10 +130,7 @@ class EvolutionController {
       });
 
     } catch (error) {
-      logger.error('Erro ao conectar em instância existente:', error);
-      res.status(500).json({ 
-        message: error.message || 'Erro interno do servidor' 
-      });
+      return handleControllerError(res, error, 'ao conectar em instância existente');
     }
   }
 
@@ -224,10 +221,7 @@ class EvolutionController {
       });
 
     } catch (error) {
-      logger.error('Erro ao criar/conectar instância:', error);
-      res.status(500).json({ 
-        message: error.message || 'Erro interno do servidor' 
-      });
+      return handleControllerError(res, error, 'ao criar/conectar instância');
     }
   }
 
@@ -304,8 +298,7 @@ class EvolutionController {
       });
 
     } catch (error) {
-      logger.error('Erro ao deletar instância:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao deletar instância');
     }
   }
 
@@ -363,8 +356,7 @@ class EvolutionController {
       });
 
     } catch (error) {
-      logger.error('Erro ao reativar instância:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao reativar instância');
     }
   }
 
@@ -412,8 +404,7 @@ async permanentDelete(req, res) {
     });
 
   } catch (error) {
-    logger.error('Erro na deleção permanente:', error);
-    res.status(500).json({ message: 'Erro interno do servidor' });
+    return handleControllerError(res, error, 'ao remover instância permanentemente');
   }
 } 
 
@@ -513,8 +504,7 @@ async fetchQRCode(req, res) {
     });
 
   } catch (error) {
-    logger.error('❌ Erro ao buscar QR Code:', error);
-    res.status(500).json({ message: 'Erro interno do servidor' });
+    return handleControllerError(res, error, 'ao buscar QR Code');
   }
 }
 
@@ -683,8 +673,7 @@ async restartInstance(req, res) {
     });
 
   } catch (error) {
-    logger.error('Erro ao reiniciar instância:', error);
-    res.status(500).json({ message: 'Erro interno do servidor' });
+    return handleControllerError(res, error, 'ao reiniciar instância');
   }
 }
 
@@ -715,8 +704,7 @@ async restartInstance(req, res) {
       });
 
     } catch (error) {
-      logger.error('Erro ao obter status:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao obter status da instância');
     }
   }
 
@@ -735,8 +723,7 @@ async restartInstance(req, res) {
       });
 
     } catch (error) {
-      logger.error('Erro ao listar instâncias:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao listar instâncias do usuário');
     }
   }
 
@@ -766,8 +753,7 @@ async restartInstance(req, res) {
     });
 
   } catch (error) {
-    logger.error('Erro ao atualizar webhook:', error);
-    res.status(500).json({ message: 'Erro interno do servidor' });
+    return handleControllerError(res, error, 'ao atualizar webhook da instância');
   }
 }
 

@@ -6,10 +6,10 @@ const WhatsAppInstance = getModel('WhatsAppInstance');
 const negotiationIntelligenceService = require('../../services/negotiationIntelligenceService');
 const { consolidateOpenDuplicatesForUser } = require('../../services/conversationReuseService');
 const logger = require('../../utils/logger');
+const { handleControllerError } = require('../../utils/errorUtils');
 
 class ConversationController {
   // Listar conversas
-  // Dentro da função getConversations no ConversationController
   async getConversations(req, res) {
     try {
       const { page = 1, limit = 16, status, channel, owner = 'master', teamMemberId } = req.query;
@@ -17,21 +17,20 @@ class ConversationController {
 
       await consolidateOpenDuplicatesForUser(userId);
 
-	      const filter = { user: userId };
-	      if (status) filter.status = status;
-	      if (channel) filter.channel = channel;
-	      if (teamMemberId) {
-	        filter.conversationOwnerType = 'teamMember';
-	        filter.assignedTeamMember = teamMemberId;
-	      } else if (owner === 'master') {
-	        filter.conversationOwnerType = 'master';
-	      }
+      const filter = { user: userId };
+      if (status) filter.status = status;
+      if (channel) filter.channel = channel;
+      if (teamMemberId) {
+        filter.conversationOwnerType = 'teamMember';
+        filter.assignedTeamMember = teamMemberId;
+      } else if (owner === 'master') {
+        filter.conversationOwnerType = 'master';
+      }
 
       const conversations = await Conversation.find(filter)
         .populate('lead', 'name phone email company taxId address')
-        // Adicionar o populate para a instância
-	        .populate('instance', 'instanceName phoneNumber')
-	        .populate('assignedTeamMember', 'name roleLabel')
+        .populate('instance', 'instanceName phoneNumber')
+        .populate('assignedTeamMember', 'name roleLabel')
         .sort({ handedOffToHuman: -1, lastMessageAt: -1, updatedAt: -1 })
         .limit(limit * 1)
         .skip((page - 1) * limit);
@@ -51,10 +50,9 @@ class ConversationController {
         totalUnread: unreadAggregate[0]?.totalUnread || 0
       });
     } catch (error) {
-      logger.error('Erro ao listar conversas:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao listar conversas');
     }
-	  }
+  }
 
   async assignLegacyToMaster(req, res) {
     try {
@@ -82,13 +80,12 @@ class ConversationController {
         message: `${result.modifiedCount || 0} conversas antigas associadas ao usuario mestre.`
       });
     } catch (error) {
-      logger.error('Erro ao associar conversas antigas ao mestre:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao associar conversas legadas ao mestre');
     }
   }
 
-	  // Buscar conversa por ID
-	  async getConversationById(req, res) {
+  // Buscar conversa por ID
+  async getConversationById(req, res) {
     try {
       const conversation = await Conversation.findOne({
         _id: req.params.id,
@@ -96,7 +93,7 @@ class ConversationController {
       })
       .populate('lead', 'name email company phone position taxId address')
       .populate('instance', 'instanceName phoneNumber')
-      .populate('assignedTeamMember', 'name roleLabel'); // <--- Adicione esta linha
+      .populate('assignedTeamMember', 'name roleLabel');
 
       if (!conversation) {
         return res.status(404).json({ message: 'Conversa não encontrada' });
@@ -104,8 +101,7 @@ class ConversationController {
 
       res.json({ conversation });
     } catch (error) {
-      logger.error('Erro ao buscar conversa:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao buscar conversa por ID');
     }
   }
 
@@ -119,8 +115,7 @@ class ConversationController {
 
       res.json({ conversations });
     } catch (error) {
-      logger.error('Erro ao buscar conversas do lead:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao buscar conversas do lead');
     }
   }
 
@@ -128,7 +123,7 @@ class ConversationController {
   async updateConversationStatus(req, res) {
     try {
       const { status } = req.body;
-      
+
       const conversation = await Conversation.findOneAndUpdate(
         { _id: req.params.id, user: req.user.id },
         { status, endedAt: status === 'closed' ? new Date() : undefined },
@@ -141,12 +136,11 @@ class ConversationController {
 
       res.json({ conversation });
     } catch (error) {
-      logger.error('Erro ao atualizar conversa:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao atualizar status da conversa');
     }
   }
 
-  // Adicionar nota à conversa
+  // Marcar conversa como lida
   async markAsRead(req, res) {
     try {
       const conversation = await Conversation.findOneAndUpdate(
@@ -158,33 +152,33 @@ class ConversationController {
       .populate('instance', 'instanceName phoneNumber');
 
       if (!conversation) {
-        return res.status(404).json({ message: 'Conversa nÃ£o encontrada' });
+        return res.status(404).json({ message: 'Conversa não encontrada' });
       }
 
       req.app.get('io')?.to(`user-${req.user.id}`).emit('conversation_updated', { conversation });
 
       res.json({ success: true, conversation });
     } catch (error) {
-      logger.error('Erro ao marcar conversa como lida:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao marcar conversa como lida');
     }
   }
 
+  // Adicionar nota à conversa
   async addNote(req, res) {
     try {
       const { content } = req.body;
-      
+
       if (!content || typeof content !== 'string') {
         return res.status(400).json({ message: 'Conteúdo da nota inválido' });
       }
 
       const conversation = await Conversation.findOneAndUpdate(
-        { 
+        {
           _id: req.params.id,
-          user: req.user.id 
+          user: req.user.id
         },
-        { 
-          $push: { 
+        {
+          $push: {
             notes: content,
             messages: {
               role: 'system',
@@ -193,7 +187,7 @@ class ConversationController {
             }
           }
         },
-        { 
+        {
           new: true,
           setDefaultsOnInsert: true
         }
@@ -209,7 +203,7 @@ class ConversationController {
         { $set: { 'messages.$.channel': conversation.channel } }
       );
 
-      res.json({ 
+      res.json({
         success: true,
         conversation: {
           ...conversation,
@@ -220,11 +214,7 @@ class ConversationController {
         }
       });
     } catch (error) {
-      logger.error('Erro ao adicionar nota:', error);
-      res.status(500).json({ 
-        message: 'Erro interno do servidor',
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
+      return handleControllerError(res, error, 'ao adicionar nota à conversa');
     }
   }
 
@@ -245,8 +235,7 @@ class ConversationController {
         conversation,
       });
     } catch (error) {
-      logger.error('Erro ao analisar negociacao:', error);
-      res.status(error.statusCode || 500).json({ message: error.message || 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao analisar negociação', error.statusCode);
     }
   }
 
@@ -286,16 +275,16 @@ class ConversationController {
         conversation: updatedConversation
       });
     } catch (error) {
-      logger.error('Erro ao atualizar conversa:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao atualizar conversa');
     }
   }
+
   async getNotes(req, res) {
     try {
       const notes = await Conversation.findOne(
-        { 
+        {
           _id: req.params.id,
-          user: req.user.id 
+          user: req.user.id
         },
         { notes: 1 }
       );
@@ -304,22 +293,18 @@ class ConversationController {
         return res.status(404).json({ message: 'Conversa não encontrada' });
       }
 
-      res.json({ 
+      res.json({
         notes: notes.notes || [],
-        success: true 
+        success: true
       });
     } catch (error) {
-      logger.error('Erro ao buscar notas:', error);
-      res.status(500).json({ 
-        message: 'Erro interno do servidor',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
+      return handleControllerError(res, error, 'ao buscar notas da conversa');
     }
   }
 
   async deleteConversation(req, res) {
     try {
-      const { id } = req.params
+      const { id } = req.params;
       const userId = req.user.id;
       const conversation = await Conversation.findOneAndDelete({
         _id: id,
@@ -335,8 +320,7 @@ class ConversationController {
         message: 'Conversa deletada com sucesso.'
       });
     } catch (error) {
-      logger.error('Erro ao deletar conversa:', error);
-      res.status(500).json({ message: 'Erro interno do servidor' });
+      return handleControllerError(res, error, 'ao deletar conversa');
     }
   }
 

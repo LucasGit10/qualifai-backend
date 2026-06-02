@@ -9,7 +9,9 @@ const User = getModel('User');
 const aiController = require('../ai/ai.controller');
 const whatsappAiController = require('./whatsapp-ai.controller');
 const MessageTemplate = getModel('MessageTemplate');
-const axios = require('axios'); // <-- ADICIONADO PARA FAZER A CHAMADA
+const axios = require('axios');
+const AppError = require('../../utils/AppError');
+const { handleControllerError } = require('../../utils/errorUtils');
 
 async function completeOnboarding(req, res) {
     logger.info('[Onboarding] Iniciando processamento do onboarding do WhatsApp.');
@@ -241,8 +243,7 @@ async function updateInstanceToken(req, res) {
         });
 
     } catch (err) {
-        logger.error('[CRUD] Erro ao atualizar o token da instância:', err);
-        res.status(500).json({ error: 'Erro interno do servidor.' });
+        return handleControllerError(res, err, 'ao atualizar token da instância');
     }
 };
 
@@ -347,7 +348,7 @@ async function sendMessage(req, res) {
 
         const instance = conversation.instance;
         if (!instance) {
-            throw new Error('Nenhuma instância do WhatsApp (Meta) associada a esta conversa.');
+            throw new AppError('Nenhuma instância do WhatsApp (Meta) associada a esta conversa. Configure uma instância nas configurações.', 422, 'NO_WHATSAPP_INSTANCE');
         }
 
         logger.info(`[sendMessage] Disparando para ${phones.size} número(s): ${Array.from(phones).join(', ')}`);
@@ -415,14 +416,7 @@ async function sendMessage(req, res) {
         });
 
     } catch (err) {
-        // Log de erro mais detalhado, incluindo o contexto da requisição
-        logger.error('Erro em sendMessage:', {
-            errorMessage: err.message,
-            stack: err.stack,
-            conversationId: req.body.conversationId, // Adiciona o ID da conversa ao log de erro
-            userId: req.user.id // Adiciona o ID do usuário ao log de erro
-        });
-        return res.status(500).json({ error: 'Falha ao enviar mensagem', details: err.message });
+        return handleControllerError(res, err, 'ao enviar mensagem');
     }
 }
 
@@ -462,14 +456,14 @@ async function sendDocument(req, res) {
 
         const instance = conversation.instance;
         if (!instance) {
-            throw new Error('Nenhuma instância do WhatsApp (Meta) associada a esta conversa.');
+            throw new AppError('Nenhuma instância do WhatsApp (Meta) associada a esta conversa. Configure uma instância nas configurações.', 422, 'NO_WHATSAPP_INSTANCE');
         }
 
         logger.info(`[sendDocument] Realizando upload do arquivo para a Meta API...`);
         const mediaId = await whatsappService.uploadMedia(instance, file.buffer, file.mimetype || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 
         if (!mediaId) {
-            throw new Error('Falha ao obter mediaId da Meta API.');
+            throw new AppError('Falha ao obter ID de mídia da API Meta. Verifique se o arquivo é suportado pelo WhatsApp.', 502, 'MEDIA_UPLOAD_FAILED');
         }
 
         const results = [];
@@ -527,13 +521,7 @@ async function sendDocument(req, res) {
         });
 
     } catch (err) {
-        logger.error('Erro em sendDocument:', {
-            errorMessage: err.message,
-            stack: err.stack,
-            conversationId: req.body.conversationId,
-            userId: req.user.id
-        });
-        return res.status(500).json({ error: 'Falha ao enviar documento', details: err.message });
+        return handleControllerError(res, err, 'ao enviar documento');
     }
 }
 
@@ -551,7 +539,7 @@ async function listReceivedMessages(req, res) {
 
         res.json(receivedMessages);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        return handleControllerError(res, err, 'ao listar mensagens recebidas');
     }
 }
 

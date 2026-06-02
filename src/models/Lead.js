@@ -59,6 +59,14 @@ const leadSchema = new mongoose.Schema({
     maxlength: 80,
     default: 'novo'
   },
+  // Consent for WhatsApp communications
+  whatsappOptIn: {
+    type: Boolean,
+    default: false
+  },
+  optInAt: {
+    type: Date
+  },
   manualReportStatus: {
     type: String,
     trim: true,

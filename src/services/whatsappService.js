@@ -5,7 +5,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const mime = require('mime-types');
-const logger = require('../utils/logger'); // Ajuste o caminho se necessário
+const logger = require('../utils/logger');
+const AppError = require('../utils/AppError');
 
 const API_VERSION = 'v23.0'; // Usando uma versão mais recente
 const REQUEST_TIMEOUT = 15000; // Timeout de 15 segundos
@@ -337,7 +338,7 @@ async function exchangeForLongLivedToken(shortLivedToken) {
     return response.data.access_token;
   } catch (error) {
     logger.error('Erro ao trocar token de curta duração por longa duração:', error.response?.data || error.message);
-    throw new Error('Falha ao obter token de longa duração.');
+    throw new AppError('Falha ao obter token de longa duração da Meta. Verifique as credenciais do app (META_APP_ID / META_APP_SECRET).', 502);
   }
 }
 
@@ -356,14 +357,15 @@ async function exchangeCodeForTokensAndInfo(code) {
     });
     const userAccessToken = tokenResponse.data.access_token;
     if (!userAccessToken) {
-      throw new Error('Não foi possível obter o token de acesso do usuário da Meta a partir do código.');
+      throw new AppError('Não foi possível obter o token de acesso da Meta a partir do código de autorização. O código pode já ter sido usado ou ter expirado.', 401);
     }
 
     return await getConnectionDetailsFromToken(userAccessToken);
     
   } catch (error) {
+    if (error instanceof AppError) throw error;
     logger.error('Erro no fluxo de troca de código do WhatsApp:', error.response?.data || error.message);
-    throw new Error('Falha ao comunicar com a API da Meta para obter detalhes da conta a partir do código.');
+    throw new AppError('Falha ao comunicar com a API da Meta para obter detalhes da conta a partir do código. Tente o fluxo de autorização novamente.', 502);
   }
 }
 
@@ -557,13 +559,13 @@ async function getConnectionDetailsFromToken(accessToken) {
         });
         const tokenData = debugResponse.data.data;
         if (!tokenData || !tokenData.is_valid) {
-            throw new Error('O token de acesso fornecido é inválido.');
+        throw new AppError('Token de acesso Meta inválido ou expirado. Reconecte a instância do WhatsApp.', 401);
         }
 
         const granularScopes = tokenData.granular_scopes || [];
         const wabaScope = granularScopes.find(scope => scope.scope === 'whatsapp_business_management');
         if (!wabaScope || !wabaScope.target_ids || wabaScope.target_ids.length === 0) {
-            throw new Error('Permissão "whatsapp_business_management" ou WABA ID não encontrado no token.');
+        throw new AppError('Permissão "whatsapp_business_management" não concedida ou WABA ID ausente no token. Refaça a autorização do app na Meta.', 403);
         }
         const wabaId = wabaScope.target_ids[0];
 
@@ -583,7 +585,7 @@ async function getConnectionDetailsFromToken(accessToken) {
         const phoneNumbers = phoneNumbersResponse.data?.data;
         if (!phoneNumbers || phoneNumbers.length === 0) {
             logger.warn(`[Meta API] Nenhum número de telefone encontrado para o WABA ID: ${wabaId}.`, { response: phoneNumbersResponse.data });
-            throw new Error('Nenhum número de telefone foi encontrado para esta conta do WhatsApp na Meta.');
+            throw new AppError('Nenhum número de telefone foi encontrado para esta conta do WhatsApp na Meta. Verifique se o número está registrado e verificado na conta Business.', 404);
         }
         
         // Prioriza números já verificados
@@ -600,8 +602,9 @@ async function getConnectionDetailsFromToken(accessToken) {
         return result;
 
     } catch (error) {
+        if (error instanceof AppError) throw error;
         logger.error('Erro no fluxo de obtenção de token do WhatsApp:', error.response?.data || error.message);
-        throw new Error('Falha ao comunicar com a API da Meta para obter detalhes da conta.');
+        throw new AppError('Falha ao comunicar com a API da Meta para obter detalhes da conta. Verifique o token e tente novamente.', 502);
     }
 }
 
