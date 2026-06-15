@@ -646,7 +646,32 @@ async function subscribeWabaToWebhooks(wabaId, token) {
   }
 }
 
-async function registerPhoneNumber(phoneNumberId, token, pin = '000000') {
+async function getPhoneNumberStatus(phoneNumberId, token) {
+  const url = `https://graph.facebook.com/${API_VERSION}/${phoneNumberId}`;
+
+  try {
+    const response = await axios.get(url, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      params: {
+        fields: 'display_phone_number,verified_name,code_verification_status,name_status,quality_rating,platform_type,status'
+      },
+      httpsAgent,
+      timeout: REQUEST_TIMEOUT
+    });
+    return response.data;
+  } catch (error) {
+    logger.error('Erro ao consultar status do número de telefone na API da Meta:', {
+      message: error.message, code: error.code, response: error.response?.data
+    });
+    throw new Error(`Falha ao consultar status do número de telefone: ${error.response?.data?.error?.message || error.message}`);
+  }
+}
+
+async function registerPhoneNumber(phoneNumberId, token, pin = process.env.WHATSAPP_REGISTRATION_PIN) {
+  if (!/^\d{6}$/.test(String(pin || ''))) {
+    throw new Error('O PIN de registro do WhatsApp deve conter exatamente 6 dígitos.');
+  }
+
   const url = `https://graph.facebook.com/${API_VERSION}/${phoneNumberId}/register`;
   const payload = {
     messaging_product: 'whatsapp',
@@ -680,6 +705,7 @@ module.exports = {
     sendTemplateMessage,
     getConnectionDetailsFromToken,
     subscribeWabaToWebhooks,
+    getPhoneNumberStatus,
     registerPhoneNumber,
     sendListMessage, // <-- EXPORTADO
     sendReplyButtonsMessage // <-- EXPORTADO

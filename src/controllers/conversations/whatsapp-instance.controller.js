@@ -16,7 +16,7 @@ const { handleControllerError } = require('../../utils/errorUtils');
 async function completeOnboarding(req, res) {
     logger.info('[Onboarding] Iniciando processamento do onboarding do WhatsApp.');
     try {
-        const { code, accessToken } = req.body;
+        const { code, accessToken, registrationPin } = req.body;
 
         logger.info('[Onboarding] Dados recebidos:', {
             hasCode: !!code,
@@ -80,7 +80,39 @@ async function completeOnboarding(req, res) {
             });
         }
 
-        logger.info('[Onboarding] Detalhes da conexão validados. Salvando no banco de dados.');
+        logger.info('[Onboarding] Detalhes da conexão validados. Conferindo registro do número na Cloud API.');
+
+        let phoneStatus = await whatsappService.getPhoneNumberStatus(
+            connectionDetails.phoneNumberId,
+            connectionDetails.accessToken
+        );
+        let isCloudApiConnected = phoneStatus.platform_type === 'CLOUD_API'
+            && phoneStatus.status === 'CONNECTED';
+
+        if (!isCloudApiConnected) {
+            logger.warn('[Onboarding] Número ainda não conectado à Cloud API. Executando registro.', {
+                phoneNumberId: connectionDetails.phoneNumberId,
+                platformType: phoneStatus.platform_type,
+                status: phoneStatus.status
+            });
+            await whatsappService.registerPhoneNumber(
+                connectionDetails.phoneNumberId,
+                connectionDetails.accessToken,
+                registrationPin || process.env.WHATSAPP_REGISTRATION_PIN
+            );
+            phoneStatus = await whatsappService.getPhoneNumberStatus(
+                connectionDetails.phoneNumberId,
+                connectionDetails.accessToken
+            );
+            isCloudApiConnected = phoneStatus.platform_type === 'CLOUD_API'
+                && phoneStatus.status === 'CONNECTED';
+        }
+
+        if (!isCloudApiConnected) {
+            throw new Error(`A Meta ainda não confirmou o número na Cloud API (status: ${phoneStatus.status || 'desconhecido'}).`);
+        }
+
+        logger.info('[Onboarding] Número confirmado na Cloud API. Salvando no banco de dados.');
 
         try {
             const instance = await WhatsAppInstance.findOneAndUpdate(
@@ -152,6 +184,9 @@ async function completeOnboarding(req, res) {
             statusCode = 401;
         } else if (err.message.includes('code')) {
             errorMessage = 'Código de autorização inválido.';
+            statusCode = 400;
+        } else if (err.message.includes('PIN')) {
+            errorMessage = err.message;
             statusCode = 400;
         }
 
