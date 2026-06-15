@@ -1,7 +1,0 @@
-{
-  "uid": "settings-qualifai-app",
-  "type": "settings",
-  "config": {
-    "entrypoint": "/app/settings/SettingsPage.tsx"
-  }
-}
