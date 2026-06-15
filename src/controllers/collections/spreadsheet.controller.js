@@ -873,7 +873,10 @@ class SpreadsheetController {
 
       const pipeline = [
         { $match: { user: uid, status: { $ne: 'pago' } } },
-        { $sort: { updatedAt: -1 } },
+        // Preserve exited debtors for movement filters, but never add their
+        // stale charges to the current balance of a debtor.
+        { $set: { _isActiveCharge: { $ne: ["$importStatus", "saiu"] } } },
+        { $sort: { _isActiveCharge: -1, updatedAt: -1 } },
         {
           $group: {
             _id: "$lead",
@@ -886,29 +889,29 @@ class SpreadsheetController {
             importStatus: { $first: "$importStatus" },
             lastSeenBatch: { $first: "$lastSeenBatch" },
             exitedInBatch: { $first: "$exitedInBatch" },
-            totalGeral: { $sum: "$total" },
-            totalPrincipalGeral: { $sum: "$principal" },
+            totalGeral: { $sum: { $cond: ["$_isActiveCharge", "$total", 0] } },
+            totalPrincipalGeral: { $sum: { $cond: ["$_isActiveCharge", "$principal", 0] } },
             totalVencido: {
               $sum: {
-                $cond: [{ $lte: ["$vencimento", today] }, "$total", 0]
+                $cond: [{ $and: ["$_isActiveCharge", { $lte: ["$vencimento", today] }] }, "$total", 0]
               }
             },
             totalFuturo: {
               $sum: {
-                $cond: [{ $gt: ["$vencimento", today] }, "$total", 0]
+                $cond: [{ $and: ["$_isActiveCharge", { $gt: ["$vencimento", today] }] }, "$total", 0]
               }
             },
             qtdVencidas: {
               $sum: {
-                $cond: [{ $lte: ["$vencimento", today] }, 1, 0]
+                $cond: [{ $and: ["$_isActiveCharge", { $lte: ["$vencimento", today] }] }, 1, 0]
               }
             },
             qtdFuturas: {
               $sum: {
-                $cond: [{ $gt: ["$vencimento", today] }, 1, 0]
+                $cond: [{ $and: ["$_isActiveCharge", { $gt: ["$vencimento", today] }] }, 1, 0]
               }
             },
-            charges: { $push: "$$ROOT" }
+            charges: { $push: { $cond: ["$_isActiveCharge", "$$ROOT", null] } }
           }
         },
         // Populate Lead status (O lead é criado no importGeneric)
@@ -973,7 +976,13 @@ class SpreadsheetController {
             totalFuturo: 1,
             qtdVencidas: 1,
             qtdFuturas: 1,
-            charges: 1,
+            charges: {
+              $filter: {
+                input: "$charges",
+                as: "charge",
+                cond: { $ne: ["$$charge", null] }
+              }
+            },
             status: "$leadInfo.status",
             manualReportStatus: "$leadInfo.manualReportStatus",
             debtorNotes: { $ifNull: ["$leadInfo.debtorNotes", []] },
