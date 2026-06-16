@@ -24,6 +24,7 @@ const upload = multer({
 });
 
 // ── Importação Unificada Genérica (UPSERT) ──────────────────────────────────
+router.post('/import/preview', auth, upload.single('file'), spreadsheetController.previewGenericImport);
 router.post('/import/generic', auth, upload.single('file'), spreadsheetController.importGeneric);
 
 // ── Semestre / Batches ──────────────────────────────────────────────────────────

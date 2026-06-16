@@ -19,6 +19,7 @@ const xlsx = require('xlsx');
 const mongoose = require('mongoose');
 const { getModel } = require('../../utils/modelProvider');
 const logger = require('../../utils/logger');
+const { chatCompletion } = require('../../services/ai/handlers/chat.handler');
 
 const Lead = getModel('Lead');
 const User = getModel('User');
@@ -56,9 +57,170 @@ const findSpreadsheetHeaderIndex = (rows) => rows.findIndex((row) => {
   return hasDebtor && coreCount >= 2;
 });
 
-const rowsToObjectsFromDetectedHeader = (rows, sheetName) => {
+const AI_COLUMN_FIELDS = {
+  cpfCnpj: 'CPF/CNPJ',
+  cliente: 'Cliente',
+  contrato: 'Contrato',
+  vencimento: 'Vencimento',
+  email: 'Email',
+  telefone1: 'Telefone 1',
+  telefone2: 'Telefone 2',
+  empreendimento: 'Empreendimento',
+  torre: 'Torre',
+  apto: 'Apto',
+  esp: 'Esp',
+  elemento: 'Elemento',
+  parcela: 'Parcela',
+  taxaExtra: 'Taxa Extra',
+  principal: 'Principal',
+  juros: 'Juros',
+  multa: 'Multa',
+  total: 'Total',
+  atraso: 'Atraso',
+  rg: 'RG',
+  profissao: 'Profissao',
+  rf: 'R/F'
+};
+
+const stripJsonFences = (text) => String(text || '')
+  .trim()
+  .replace(/^```(?:json)?/i, '')
+  .replace(/```$/i, '')
+  .trim();
+
+const parseJsonObject = (text) => {
+  const clean = stripJsonFences(text);
+  try {
+    return JSON.parse(clean);
+  } catch (_) {
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start >= 0 && end > start) return JSON.parse(clean.slice(start, end + 1));
+    throw new Error('Resposta da IA nao veio em JSON valido.');
+  }
+};
+
+const buildAiSampleFromRows = (rows) => rows.slice(0, 20).map((row, rowIndex) => ({
+  rowIndex,
+  values: (row || []).slice(0, 35).map((value) => {
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    if (value === null || value === undefined) return '';
+    return String(value).trim().slice(0, 80);
+  })
+}));
+
+const buildAiSampleFromRecords = (records) => {
+  const headers = Object.keys(records[0] || {}).slice(0, 35);
+  const rows = records.slice(0, 12).map((record) => headers.map((header) => {
+    const value = record[header];
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    if (value === null || value === undefined) return '';
+    return String(value).trim().slice(0, 80);
+  }));
+
+  return { headers, rows };
+};
+
+const callAiColumnMapper = async (sample, sourceLabel) => {
+  const raw = await chatCompletion([
+    {
+      role: 'system',
+      content: [
+        'Voce mapeia colunas de planilhas brasileiras de cobranca/inadimplencia.',
+        'Responda somente JSON valido, sem markdown.',
+        'Use indices 0-based. Se nao souber um campo, use null.'
+      ].join(' ')
+    },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        source: sourceLabel,
+        expectedJson: {
+          headerRowIndex: 'numero da linha de cabecalho, ou 0 para CSV ja parseado',
+          columns: Object.fromEntries(Object.keys(AI_COLUMN_FIELDS).map((field) => [field, 'indice da coluna ou null'])),
+          confidence: 'numero entre 0 e 1'
+        },
+        requiredMeaning: {
+          cpfCnpj: 'CPF, CNPJ ou documento do devedor',
+          cliente: 'nome do cliente/devedor',
+          vencimento: 'data de vencimento da parcela/cobranca',
+          principal: 'valor principal/original',
+          total: 'valor total/corrigido/em aberto'
+        },
+        sample
+      })
+    }
+  ], {
+    temperature: 0,
+    max_tokens: 1200,
+    response_format: { type: 'json_object' },
+    timeout: 20000
+  });
+
+  const parsed = parseJsonObject(raw);
+  const columns = parsed?.columns || {};
+  const confidence = Number(parsed?.confidence || 0);
+  if (!Number.isFinite(confidence) || confidence < 0.45) {
+    throw new Error('Baixa confianca no mapeamento de colunas.');
+  }
+  return { ...parsed, columns };
+};
+
+const mapRowsWithAiColumns = (rows, mapping, sheetName) => {
+  const headerIndex = Number.isInteger(mapping.headerRowIndex) ? mapping.headerRowIndex : 0;
+  const header = rows[headerIndex] || [];
+  const entries = Object.entries(mapping.columns || {})
+    .filter(([field, index]) => AI_COLUMN_FIELDS[field] && Number.isInteger(index) && index >= 0);
+
+  if (!entries.length) return [];
+
+  logger.info(`[Spreadsheet] IA mapeou ${entries.length} coluna(s) na aba ${sheetName}.`);
+  return rows.slice(headerIndex + 1).reduce((items, row) => {
+    if (!row || row.every((value) => value === null || value === undefined || value === '')) return items;
+    const item = {};
+    entries.forEach(([field, index]) => {
+      const canonical = AI_COLUMN_FIELDS[field];
+      const originalHeader = String(header[index] || '').trim();
+      const value = row[index] ?? null;
+      item[canonical] = value;
+      if (originalHeader && !item[originalHeader]) item[originalHeader] = value;
+    });
+    if (col(item, 'Cliente', 'CPF/CNPJ', 'CPF', 'CNPJ', 'Documento')) items.push(item);
+    return items;
+  }, []);
+};
+
+const remapCsvRecordsWithAi = async (records) => {
+  if (!Array.isArray(records) || !records.length) return records;
+  const sample = buildAiSampleFromRecords(records);
+  const mapping = await callAiColumnMapper(sample, 'CSV importado');
+  const entries = Object.entries(mapping.columns || {})
+    .filter(([field, index]) => AI_COLUMN_FIELDS[field] && Number.isInteger(index) && index >= 0);
+
+  if (!entries.length) return records;
+  logger.info(`[Spreadsheet] IA mapeou ${entries.length} coluna(s) do CSV.`);
+
+  return records.map((record) => {
+    const item = { ...record };
+    entries.forEach(([field, index]) => {
+      const header = sample.headers[index];
+      if (header) item[AI_COLUMN_FIELDS[field]] = record[header];
+    });
+    return item;
+  });
+};
+
+const rowsToObjectsFromDetectedHeader = async (rows, sheetName, options = {}) => {
   const headerIndex = findSpreadsheetHeaderIndex(rows);
   if (headerIndex === -1) {
+    if (options.useAi !== false) {
+      try {
+        const mapping = await callAiColumnMapper(buildAiSampleFromRows(rows), `Aba ${sheetName}`);
+        return mapRowsWithAiColumns(rows, mapping, sheetName);
+      } catch (aiErr) {
+        logger.warn(`[Spreadsheet] IA nao conseguiu mapear a aba ${sheetName}: ${aiErr.message}`);
+      }
+    }
     logger.warn(`[Spreadsheet] Aba ${sheetName} ignorada: cabeçalho Cliente/Vencimento/Principal/Total não encontrado.`);
     return [];
   }
@@ -79,7 +241,16 @@ const rowsToObjectsFromDetectedHeader = (rows, sheetName) => {
   }, []);
 };
 
-const readFileRecords = async (filePath, fileExt) => {
+const hasReadableDebtColumns = (records) => Array.isArray(records) && records.some((row) => (
+  col(row, 'Cliente', 'CPF/CNPJ', 'CPF', 'CNPJ', 'Documento')
+  && (
+    col(row, 'Vencimento', 'VENCIMENTO', 'DATA_VENCIMENTO', 'Data do Vencimento')
+    || col(row, 'Principal', 'PRINCIPAL')
+    || col(row, 'Total', 'TOTAL', 'Valor')
+  )
+));
+
+const readFileRecords = async (filePath, fileExt, options = {}) => {
   if (fileExt === '.csv') {
     const separator = await detectSeparator(filePath);
     const records = [];
@@ -90,19 +261,26 @@ const readFileRecords = async (filePath, fileExt) => {
         .on('end', resolve)
         .on('error', reject);
     });
+    if (!hasReadableDebtColumns(records) && options.useAi !== false) {
+      try {
+        return await remapCsvRecordsWithAi(records);
+      } catch (aiErr) {
+        logger.warn(`[Spreadsheet] IA nao conseguiu mapear o CSV: ${aiErr.message}`);
+      }
+    }
     return records;
   } else if (['.xlsx', '.xls'].includes(fileExt)) {
     const workbook = xlsx.readFile(filePath, { cellDates: true });
     let allRecords = [];
     
     // Percorre todas as abas da planilha
-    workbook.SheetNames.forEach(sheetName => {
+    for (const sheetName of workbook.SheetNames) {
       const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: null, blankrows: false });
-      const sheetRecords = rowsToObjectsFromDetectedHeader(rows, sheetName);
+      const sheetRecords = await rowsToObjectsFromDetectedHeader(rows, sheetName, options);
       if (Array.isArray(sheetRecords)) {
         allRecords = allRecords.concat(sheetRecords);
       }
-    });
+    }
     
     return allRecords;
   }
@@ -239,6 +417,110 @@ const getNextOccurrenceKey = (map, baseKey) => {
   return `${baseKey}|seq:${occurrence}`;
 };
 
+const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+const MONEY_COLUMN_ALIASES = {
+  principal: ['Principal', 'PRINCIPAL'],
+  juros: ['Juros', 'Juros de Mora', 'JUROS'],
+  multa: ['Multa', 'MULTA'],
+  total: ['Total', 'TOTAL', 'Valor']
+};
+
+const getMoneyValue = (row, field) => parseDecimal(col(row, ...(MONEY_COLUMN_ALIASES[field] || [])));
+
+const setColumnValue = (row, aliases, value) => {
+  const match = Object.keys(row).find((key) => aliases.map(normalizeKey).includes(normalizeKey(key)));
+  if (match) row[match] = value;
+  row[aliases[0]] = value;
+};
+
+const analyzeImportValues = (records) => {
+  const corrections = [];
+  let validRows = 0;
+  let invalidRows = 0;
+  let totalAmount = 0;
+  let principalAmount = 0;
+
+  const previewRows = records.slice(0, 30).map((row, index) => {
+    const cliente = col(row, 'Cliente', 'CLIENTE', 'NOME', 'Razao', 'Nome do Cliente');
+    const cpfCnpj = col(row, 'CPF/CNPJ', 'CPF', 'CNPJ', 'cpfCnpj', 'Documento');
+    const contrato = col(row, 'Contrato', 'CONTRATO', 'Numero do Contrato');
+    const vencimento = parseDate(col(row, 'Vencimento', 'VENCIMENTO', 'DATA_VENCIMENTO', 'Data do Vencimento'));
+    const principal = roundMoney(getMoneyValue(row, 'principal'));
+    const juros = roundMoney(getMoneyValue(row, 'juros'));
+    const multa = roundMoney(getMoneyValue(row, 'multa'));
+    const total = roundMoney(getMoneyValue(row, 'total'));
+
+    return {
+      rowIndex: index,
+      cliente: cliente || cpfCnpj || 'Sem identificacao',
+      cpfCnpj: cpfCnpj || '',
+      contrato: contrato || '',
+      vencimento: vencimento ? vencimento.toISOString().slice(0, 10) : '',
+      principal,
+      juros,
+      multa,
+      total
+    };
+  });
+
+  records.forEach((row, index) => {
+    const cliente = col(row, 'Cliente', 'CLIENTE', 'NOME', 'Razao', 'Nome do Cliente');
+    const cpfCnpj = col(row, 'CPF/CNPJ', 'CPF', 'CNPJ', 'cpfCnpj', 'Documento');
+    const vencimento = parseDate(col(row, 'Vencimento', 'VENCIMENTO', 'DATA_VENCIMENTO', 'Data do Vencimento'));
+    const principal = roundMoney(getMoneyValue(row, 'principal'));
+    const juros = roundMoney(getMoneyValue(row, 'juros'));
+    const multa = roundMoney(getMoneyValue(row, 'multa'));
+    const total = roundMoney(getMoneyValue(row, 'total'));
+    const expectedTotal = roundMoney(principal + juros + multa);
+
+    if (!cliente && !cpfCnpj) invalidRows++;
+    else if (!vencimento) invalidRows++;
+    else validRows++;
+
+    totalAmount += total;
+    principalAmount += principal;
+
+    if (Math.abs(expectedTotal - total) >= 0.01) {
+      corrections.push({
+        id: `row-${index}-total`,
+        rowIndex: index,
+        line: index + 2,
+        field: 'Total',
+        currentValue: total,
+        suggestedValue: expectedTotal,
+        difference: roundMoney(expectedTotal - total),
+        reason: 'Total diferente da soma Principal + Juros + Multa',
+        cliente: cliente || cpfCnpj || 'Sem identificacao'
+      });
+    }
+  });
+
+  return {
+    totalRows: records.length,
+    validRows,
+    invalidRows,
+    totalAmount: roundMoney(totalAmount),
+    principalAmount: roundMoney(principalAmount),
+    corrections,
+    previewRows
+  };
+};
+
+const applyValueCorrections = (records) => {
+  const analysis = analyzeImportValues(records);
+  const correctionsByRow = new Map(analysis.corrections.map((correction) => [correction.rowIndex, correction]));
+  const correctedRecords = records.map((row, index) => {
+    const correction = correctionsByRow.get(index);
+    if (!correction) return row;
+    const nextRow = { ...row };
+    setColumnValue(nextRow, MONEY_COLUMN_ALIASES.total, correction.suggestedValue);
+    return nextRow;
+  });
+
+  return { records: correctedRecords, corrections: analysis.corrections };
+};
+
 const getDateRange = (date) => {
   const start = new Date(date);
   start.setUTCHours(0, 0, 0, 0);
@@ -345,6 +627,46 @@ const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefo
 
 class SpreadsheetController {
 
+  async previewGenericImport(req, res) {
+    if (!req.file) return res.status(400).json({ message: 'Arquivo e obrigatorio.' });
+
+    const filePath = req.file.path;
+    const fileExt = path.extname(req.file.originalname).toLowerCase();
+    const io = req.app.get('io');
+
+    try {
+      if (io) io.emit('spreadsheet-progress', {
+        percent: 3,
+        current: 0,
+        total: 0,
+        status: 'analisando_colunas',
+        message: 'IA analisando as colunas da planilha...'
+      });
+
+      const records = await readFileRecords(filePath, fileExt, { useAi: true });
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+      if (!records.length) {
+        return res.status(400).json({
+          message: 'Nenhuma linha valida encontrada. Verifique se a planilha tem colunas Cliente, Vencimento, Principal e Total.'
+        });
+      }
+
+      const analysis = analyzeImportValues(records);
+      return res.json({
+        success: true,
+        ...analysis,
+        hasCorrections: analysis.corrections.length > 0,
+        message: analysis.corrections.length
+          ? 'Encontramos possiveis correcoes de valores para revisar.'
+          : 'Extracao validada sem correcoes de valores sugeridas.'
+      });
+    } catch (readErr) {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return res.status(400).json({ message: `Erro ao ler o arquivo: ${readErr.message}` });
+    }
+  }
+
   // â”€â”€ Importação Genérica de Planilha de Cobrança (UPSERT) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async importGeneric(req, res) {
     if (!req.file) return res.status(400).json({ message: 'Arquivo é obrigatório.' });
@@ -358,7 +680,19 @@ class SpreadsheetController {
 
     let records;
     try {
-      records = await readFileRecords(filePath, fileExt);
+      if (io) io.emit('spreadsheet-progress', {
+        percent: 3,
+        current: 0,
+        total: 0,
+        status: 'analisando_colunas',
+        message: 'IA analisando as colunas da planilha...'
+      });
+      records = await readFileRecords(filePath, fileExt, { useAi: true });
+      if (req.body.applyValueCorrections === 'true' || req.body.applyValueCorrections === true) {
+        const correctionResult = applyValueCorrections(records);
+        records = correctionResult.records;
+        logger.info(`[Spreadsheet] Aplicadas ${correctionResult.corrections.length} correcao(oes) de valor aprovadas pelo usuario.`);
+      }
       console.log(`[Import] Arquivo lido. Total de linhas: ${records.length}`);
       if (!records.length) {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
