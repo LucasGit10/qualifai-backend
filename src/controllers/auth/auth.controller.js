@@ -38,7 +38,7 @@ class AuthController {
         company,
         taxId,
         role: 'manager', // New users default to manager
-        emailVerified: false,
+        emailVerified: true,
       });
 
       await user.save();
@@ -49,13 +49,13 @@ class AuthController {
         { expiresIn: '7d' }
       );
 
-      const emailToken = jwt.sign(
-        { id: user._id },
-        process.env.JWT_SECRET,
-        { expiresIn: '1d' }
-      );
-
-      await sendVerificationEmail(user, emailToken);
+      // Email verification is temporarily disabled during onboarding.
+      // const emailToken = jwt.sign(
+      //   { id: user._id },
+      //   process.env.JWT_SECRET,
+      //   { expiresIn: '1d' }
+      // );
+      // await sendVerificationEmail(user, emailToken);
 
       const userResponse = user.toObject();
       delete userResponse.password;
@@ -72,7 +72,7 @@ class AuthController {
         success: true,
         user: userResponse,
         token: authToken,
-        message: 'Usuário criado. Verifique seu email para ativar a conta.'
+        message: 'Usuário criado com sucesso.'
       });
 
     } catch (error) {
@@ -99,9 +99,10 @@ class AuthController {
         return res.status(401).json({ message: 'Credenciais inválidas' });
       }
 
-      if (!user.emailVerified) {
-        return res.status(403).json({ message: 'Conta não confirmada. Por favor, verifique seu email.' });
-      }
+      // Email verification is temporarily disabled during onboarding.
+      // if (!user.emailVerified) {
+      //   return res.status(403).json({ message: 'Conta não confirmada. Por favor, verifique seu email.' });
+      // }
   
       const token = jwt.sign(
         { id: user._id },
