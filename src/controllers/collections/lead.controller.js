@@ -2,6 +2,7 @@ const { getModel } = require('../../utils/modelProvider');
 const Lead = getModel('Lead');
 const User = getModel('User');
 const Conversation = getModel('Conversation');
+const mongoose = require('mongoose');
 const logger = require('../../utils/logger');
 const emailService = require('../../services/emailService');
 const { findReusableConversation, touchOutboundConversation } = require('../../services/conversationReuseService');
@@ -145,6 +146,36 @@ class LeadController {
       res.json(leads);
     } catch (error) {
       return handleControllerError(res, error, 'ao listar leads (dropdown)');
+    }
+  }
+
+  // Contar todos os leads por status, sem depender da pagina atual da listagem.
+  async getLeadStatusCounts(req, res) {
+    try {
+      const userId = new mongoose.Types.ObjectId(req.user.id);
+      const counts = await Lead.aggregate([
+        { $match: { user: userId } },
+        {
+          $group: {
+            _id: { $ifNull: ['$status', 'novo'] },
+            count: { $sum: 1 }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]);
+
+      const countsByStatus = counts.reduce((acc, item) => {
+        const status = normalizeOption(item._id) || 'novo';
+        acc[status] = item.count;
+        return acc;
+      }, {});
+
+      res.json({
+        counts: countsByStatus,
+        total: counts.reduce((sum, item) => sum + item.count, 0)
+      });
+    } catch (error) {
+      return handleControllerError(res, error, 'ao contar leads por status');
     }
   }
 

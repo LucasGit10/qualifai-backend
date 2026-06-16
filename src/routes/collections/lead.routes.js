@@ -59,6 +59,7 @@ router.post('/delete-multiple', auth, leadController.deleteMultipleLeads);
 router.get('/', auth, leadController.getLeads);
 router.get('/list', auth, leadController.getLeadList);
 router.post('/', auth, validateLead, leadController.createLead);
+router.get('/status-counts', auth, leadController.getLeadStatusCounts);
 router.get('/statuses', auth, leadController.getLeadStatuses);
 router.post('/statuses', auth, leadController.createLeadStatus);
 router.get('/tags', auth, leadController.getLeadTags);
