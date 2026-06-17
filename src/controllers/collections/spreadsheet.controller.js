@@ -178,6 +178,10 @@ const mapRowsWithAiColumns = (rows, mapping, sheetName) => {
   return rows.slice(headerIndex + 1).reduce((items, row) => {
     if (!row || row.every((value) => value === null || value === undefined || value === '')) return items;
     const item = {};
+    header.forEach((headerName, index) => {
+      const originalHeader = String(headerName || '').trim();
+      if (originalHeader) item[originalHeader] = row[index] ?? null;
+    });
     entries.forEach(([field, index]) => {
       const canonical = AI_COLUMN_FIELDS[field];
       const originalHeader = String(header[index] || '').trim();
@@ -365,6 +369,57 @@ const normalizePhone = (phone) => {
     return '55' + clean;
   }
   return clean;
+};
+
+const isPhoneColumn = (header) => {
+  const key = normalizeKey(header);
+  if (!key) return false;
+  return [
+    'telefone',
+    'telefone1',
+    'telefone2',
+    'telefone3',
+    'telefone4',
+    'fone',
+    'celular',
+    'whatsapp',
+    'zap',
+    'mobile',
+    'phone',
+    'contato',
+    'contatonovo',
+    'tel'
+  ].some((token) => key.includes(token));
+};
+
+const extractPhoneCandidates = (value) => {
+  if (value === null || value === undefined || value === '') return [];
+  const text = String(value);
+  const matches = text.match(/\+?\d[\d\s().-]{7,}\d/g);
+  const candidates = matches && matches.length ? matches : text.split(/[;,\n/|]+/);
+  return candidates
+    .map(normalizePhone)
+    .filter((phone) => phone && phone.length >= 10);
+};
+
+const getPhoneContactsFromRow = (row) => {
+  const contacts = [];
+  const seen = new Set();
+
+  Object.keys(row || {}).forEach((header) => {
+    if (!isPhoneColumn(header)) return;
+    extractPhoneCandidates(row[header]).forEach((phone) => {
+      if (seen.has(phone)) return;
+      seen.add(phone);
+      contacts.push({
+        type: 'phone',
+        value: phone,
+        label: `${String(header).trim() || 'Telefone'} (Planilha)`
+      });
+    });
+  });
+
+  return contacts;
 };
 
 const normalizeText = (value) => String(value || '')
@@ -778,6 +833,9 @@ class SpreadsheetController {
             const docNorm = cpfCnpj ? String(cpfCnpj).replace(/\D/g, '') : null;
             const emailInput = col(row, 'E-mail', 'Email', 'EMAIL');
             const generatedEmail = emailInput ? emailInput.toLowerCase() : (docNorm ? docNorm + '@importado.local' : null);
+            const phoneContacts = getPhoneContactsFromRow(row);
+            const primaryPhone = phoneContacts[0]?.value || null;
+            const secondaryPhone = phoneContacts[1]?.value || null;
 
             let lead = (docNorm ? leadByTaxId.get(docNorm) : null)
                     || (generatedEmail ? leadByEmail.get(generatedEmail) : null);
@@ -790,9 +848,9 @@ class SpreadsheetController {
                 name: clienteNome || cpfCnpj || 'Devedor Importado',
                 email: generatedEmail || ('extra_' + Date.now() + '_' + i + '@importado.local'),
                 taxId: docNorm,
-                phone: normalizePhone(col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1')) || null,
+                phone: primaryPhone,
                 company: col(row, 'Empreendimento', 'EMPREENDIMENTO', 'Empresa') || 'Importado',
-                source: 'form', status: 'novo', tags: ['novo'], contacts: []
+                source: 'form', status: 'novo', tags: ['novo'], contacts: phoneContacts
               };
               leadsToCreate.push(newLead);
               if (docNorm) leadByTaxId.set(docNorm, newLead);
@@ -809,11 +867,7 @@ class SpreadsheetController {
                 }
               };
               
-              const p1 = normalizePhone(col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'));
-              const p2 = normalizePhone(col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'));
-              
-              if (p1) addContact('phone', p1, 'Telefone 1 (Planilha)');
-              if (p2) addContact('phone', p2, 'Telefone 2 (Planilha)');
+              phoneContacts.forEach((phoneContact) => addContact('phone', phoneContact.value, phoneContact.label));
               if (emailInput && /^\S+@\S+\.\S+$/.test(emailInput)) addContact('email', emailInput.toLowerCase(), 'E-mail (Planilha)');
 
               if (leadUpdated) {
@@ -844,8 +898,8 @@ class SpreadsheetController {
               rg:    col(row, 'RG', 'Rg'),
               profissao: col(row, 'Profissao', 'PROFISSAO'),
               cpfCnpj,
-              telefone1: col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
-              telefone2: col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
+              telefone1: primaryPhone || col(row, 'Telefone 1', 'TELEFONE1', 'Telefone', 'Celular', 'TELEFONE 1'),
+              telefone2: secondaryPhone || col(row, 'Telefone 2', 'TELEFONE2', 'TELEFONE 2', 'Contato Novo'),
               parcela, debtorImportKey,
               importStatus: rowImportStatus, lastSeenBatch: importBatch, exitedInBatch: null,
               atraso:    parseInt(col(row, 'Atraso', 'ATRASO', 'Atraso (dias)') || '0') || 0,
