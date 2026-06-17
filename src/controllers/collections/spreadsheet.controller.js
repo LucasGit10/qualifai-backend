@@ -474,6 +474,27 @@ const getNextOccurrenceKey = (map, baseKey) => {
 
 const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
+const buildManualContacts = ({ telefone1, telefone2, contatos = [], email }) => {
+  const contacts = [];
+  const seen = new Set();
+  const addContact = (type, value, label) => {
+    const cleanValue = type === 'phone' ? normalizePhone(value) : String(value || '').trim().toLowerCase();
+    if (!cleanValue || seen.has(`${type}:${cleanValue}`)) return;
+    seen.add(`${type}:${cleanValue}`);
+    contacts.push({ type, value: cleanValue, label });
+  };
+
+  addContact('phone', telefone1, 'Telefone principal');
+  addContact('phone', telefone2, 'Telefone secundario');
+  contatos.forEach((contact, index) => {
+    if (typeof contact === 'string') addContact('phone', contact, `Telefone extra ${index + 1}`);
+    else addContact(contact.type || 'phone', contact.value, contact.label || `Contato extra ${index + 1}`);
+  });
+  if (email && /^\S+@\S+\.\S+$/.test(email)) addContact('email', email, 'E-mail');
+
+  return contacts;
+};
+
 const MONEY_COLUMN_ALIASES = {
   principal: ['Principal', 'PRINCIPAL'],
   juros: ['Juros', 'Juros de Mora', 'JUROS'],
@@ -1659,6 +1680,151 @@ class SpreadsheetController {
     }
   }
 
+  async createManualDebtor(req, res) {
+    try {
+      const userId = req.user.id;
+      const uid = new mongoose.Types.ObjectId(userId);
+      const {
+        cliente,
+        cpfCnpj,
+        email,
+        telefone1,
+        telefone2,
+        contatos = [],
+        empreendimento,
+        contrato,
+        vencimento,
+        principal,
+        juros,
+        multa,
+        total,
+        atraso,
+        parcela,
+        torre,
+        apto,
+        enderecoResidencial,
+        profissao,
+        status,
+        note
+      } = req.body || {};
+
+      const cleanName = String(cliente || '').trim();
+      const docNorm = normalizeDocument(cpfCnpj);
+      const cleanEmail = String(email || '').trim().toLowerCase();
+      const dueDate = parseDate(vencimento);
+      const principalValue = roundMoney(principal);
+      const jurosValue = roundMoney(juros);
+      const multaValue = roundMoney(multa);
+      const totalValue = roundMoney(total || (principalValue + jurosValue + multaValue));
+
+      if (!cleanName && !docNorm) return res.status(400).json({ message: 'Informe o nome ou CPF/CNPJ do devedor.' });
+      if (!dueDate) return res.status(400).json({ message: 'Informe uma data de vencimento valida.' });
+      if (totalValue <= 0) return res.status(400).json({ message: 'Informe um valor total maior que zero.' });
+
+      const generatedEmail = cleanEmail || (docNorm ? `${docNorm}@manual.local` : `manual_${Date.now()}@manual.local`);
+      const contacts = buildManualContacts({ telefone1, telefone2, contatos, email: cleanEmail });
+      const primaryPhone = contacts.find((contact) => contact.type === 'phone')?.value || null;
+      const secondaryPhone = contacts.filter((contact) => contact.type === 'phone')[1]?.value || null;
+
+      const leadQuery = {
+        user: uid,
+        $or: [
+          ...(docNorm ? [{ taxId: docNorm }] : []),
+          ...(generatedEmail ? [{ email: generatedEmail }] : []),
+          ...(!docNorm && !cleanEmail && cleanName ? [{ name: cleanName }] : [])
+        ]
+      };
+
+      let lead = await Lead.findOne(leadQuery);
+      const noteContent = String(note || '').trim();
+      const debtorStatus = normalizeOption(status) || 'novo';
+      if (!lead) {
+        lead = new Lead({
+          user: uid,
+          name: cleanName || docNorm || 'Devedor Manual',
+          email: generatedEmail,
+          taxId: docNorm,
+          phone: primaryPhone,
+          company: String(empreendimento || 'Cadastro manual').trim(),
+          source: 'form',
+          status: debtorStatus,
+          tags: ['manual'],
+          contacts,
+          debtorNotes: noteContent ? [{ content: noteContent, createdAt: new Date(), createdBy: uid }] : []
+        });
+        await lead.save();
+      } else {
+        if (!lead.contacts) lead.contacts = [];
+        const seenContacts = new Set((lead.contacts || []).map((contact) => `${contact.type}:${contact.value}`));
+        contacts.forEach((contact) => {
+          const key = `${contact.type}:${contact.value}`;
+          if (!seenContacts.has(key)) {
+            lead.contacts.push(contact);
+            seenContacts.add(key);
+          }
+        });
+        if (!lead.phone && primaryPhone) lead.phone = primaryPhone;
+        if (cleanName && (!lead.name || lead.name === lead.email)) lead.name = cleanName;
+        if (empreendimento) lead.company = String(empreendimento).trim();
+        lead.status = debtorStatus;
+        lead.tags = Array.from(new Set([...(lead.tags || []), 'manual']));
+        if (noteContent) lead.debtorNotes.push({ content: noteContent, createdAt: new Date(), createdBy: uid });
+        await lead.save();
+      }
+
+      await User.updateOne(
+        { _id: uid },
+        { $addToSet: { 'settings.debtorStatuses': debtorStatus } }
+      );
+
+      const debtorImportKey = getDebtorImportKey({ cpfCnpj: docNorm, cliente: cleanName, lead: lead._id });
+      const chargeBaseKey = getChargeImportKey({
+        debtorImportKey,
+        contrato,
+        vencimento: dueDate,
+        parcela: parcela || 1
+      });
+      const chargeImportKey = `${chargeBaseKey}|manual:${Date.now()}`;
+      const today = new Date();
+      const computedDelay = Math.max(0, Math.floor((today.setHours(0, 0, 0, 0) - new Date(dueDate).setHours(0, 0, 0, 0)) / 86400000));
+
+      const debt = await InadimplenciaDetalhe.create({
+        user: uid,
+        lead: lead._id,
+        importBatch: 'manual',
+        arquivoOrigem: 'MANUAL',
+        debtorImportKey,
+        chargeImportKey,
+        firstSeenBatch: 'manual',
+        lastSeenBatch: 'manual',
+        importStatus: 'novo',
+        cliente: cleanName || lead.name,
+        cpfCnpj: cpfCnpj || docNorm,
+        telefone1: primaryPhone,
+        telefone2: secondaryPhone,
+        empreendimento: String(empreendimento || '').trim(),
+        contrato: String(contrato || '').trim(),
+        vencimento: dueDate,
+        principal: principalValue || totalValue,
+        juros: jurosValue,
+        multa: multaValue,
+        total: totalValue,
+        atraso: Number.isFinite(Number(atraso)) ? Number(atraso) : computedDelay,
+        parcela: Number(parcela) || 1,
+        torre,
+        apto,
+        enderecoResidencial,
+        profissao,
+        tags: ['manual']
+      });
+
+      res.status(201).json({ success: true, lead, debt });
+    } catch (e) {
+      logger.error('[createManualDebtor] Erro:', e);
+      res.status(500).json({ message: e.message || 'Erro ao criar devedor manual.' });
+    }
+  }
+
   async clearData(req, res) {
     try {
       const userId = req.user.id;
@@ -1919,7 +2085,13 @@ class SpreadsheetController {
           content: `PAGAMENTO CONFIRMADO: ${pdfFmt(p.paidAmount)} (Importado) via ${translateMethod(p.paymentMethod)}`
         })));
 
-        let events = [...mensagens, ...payments];
+        const notes = (d.leadInfo?.debtorNotes || []).map((note) => ({
+          date: note.createdAt,
+          role: 'note',
+          content: note.content
+        }));
+
+        let events = [...mensagens, ...payments, ...notes];
 
         if (events.length > 0) {
           events.sort((a,b) => new Date(a.date) - new Date(b.date));
@@ -1939,6 +2111,10 @@ class SpreadsheetController {
               roleStr = 'FINANCEIRO';
               labelColor = '#10b981'; // Verde para pagamentos
               textColor = '#065f46';
+            } else if (m.role === 'note') {
+              roleStr = 'NOTA';
+              labelColor = '#f59e0b';
+              textColor = '#92400e';
             } else {
               roleStr = 'SISTEMA';
             }

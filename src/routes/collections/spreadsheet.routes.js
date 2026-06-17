@@ -34,6 +34,7 @@ router.get('/totals', auth, spreadsheetController.getCarteiraTotals);
 router.get('/export/debtors', auth, spreadsheetController.exportDebtorsReport);
 router.get('/by-month', auth, spreadsheetController.getByMonth);
 router.get('/import-batches', auth, spreadsheetController.getImportBatches);
+router.post('/debtors/manual', auth, spreadsheetController.createManualDebtor);
 router.post('/debtors/:leadId/next-action', auth, spreadsheetController.scheduleDebtorNextAction);
 router.delete('/debtors/:leadId/next-action', auth, spreadsheetController.cancelDebtorNextAction);
 router.put('/debtors/:leadId/status', auth, spreadsheetController.updateDebtorStatus);
