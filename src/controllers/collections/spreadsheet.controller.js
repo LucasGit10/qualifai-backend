@@ -1705,26 +1705,38 @@ class SpreadsheetController {
         enderecoResidencial,
         profissao,
         status,
-        note
+        note,
+        dividas
       } = req.body || {};
 
       const cleanName = String(cliente || '').trim();
       const docNorm = normalizeDocument(cpfCnpj);
       const cleanEmail = String(email || '').trim().toLowerCase();
-      const dueDate = parseDate(vencimento);
-      const principalValue = roundMoney(principal);
-      const jurosValue = roundMoney(juros);
-      const multaValue = roundMoney(multa);
-      const totalValue = roundMoney(total || (principalValue + jurosValue + multaValue));
+      const debtsToProcess = (dividas && dividas.length > 0) ? dividas : [{
+        vencimento,
+        principal,
+        juros,
+        multa,
+        total,
+        atraso,
+        parcela,
+        contrato
+      }];
 
-      if (!cleanName && !docNorm) return res.status(400).json({ message: 'Informe o nome ou CPF/CNPJ do devedor.' });
-      if (!dueDate) return res.status(400).json({ message: 'Informe uma data de vencimento valida.' });
-      if (totalValue <= 0) return res.status(400).json({ message: 'Informe um valor total maior que zero.' });
+      for (const d of debtsToProcess) {
+        const dueDate = parseDate(d.vencimento);
+        const pValue = roundMoney(d.principal);
+        const jValue = roundMoney(d.juros);
+        const mValue = roundMoney(d.multa);
+        const tValue = roundMoney(d.total || (pValue + jValue + mValue));
+        if (!dueDate) return res.status(400).json({ message: 'Informe uma data de vencimento valida para todas as dividas.' });
+        if (tValue <= 0) return res.status(400).json({ message: 'Informe um valor total maior que zero para todas as dividas.' });
+      }
 
       const generatedEmail = cleanEmail || (docNorm ? `${docNorm}@manual.local` : `manual_${Date.now()}@manual.local`);
-      const contacts = buildManualContacts({ telefone1, telefone2, contatos, email: cleanEmail });
-      const primaryPhone = contacts.find((contact) => contact.type === 'phone')?.value || null;
-      const secondaryPhone = contacts.filter((contact) => contact.type === 'phone')[1]?.value || null;
+      const contactsArray = buildManualContacts({ telefone1, telefone2, contatos, email: cleanEmail });
+      const primaryPhone = contactsArray.find((contact) => contact.type === 'phone')?.value || null;
+      const secondaryPhone = contactsArray.filter((contact) => contact.type === 'phone')[1]?.value || null;
 
       const leadQuery = {
         user: uid,
@@ -1749,14 +1761,14 @@ class SpreadsheetController {
           source: 'form',
           status: debtorStatus,
           tags: ['manual'],
-          contacts,
+          contacts: contactsArray,
           debtorNotes: noteContent ? [{ content: noteContent, createdAt: new Date(), createdBy: uid }] : []
         });
         await lead.save();
       } else {
         if (!lead.contacts) lead.contacts = [];
         const seenContacts = new Set((lead.contacts || []).map((contact) => `${contact.type}:${contact.value}`));
-        contacts.forEach((contact) => {
+        contactsArray.forEach((contact) => {
           const key = `${contact.type}:${contact.value}`;
           if (!seenContacts.has(key)) {
             lead.contacts.push(contact);
@@ -1777,48 +1789,61 @@ class SpreadsheetController {
         { $addToSet: { 'settings.debtorStatuses': debtorStatus } }
       );
 
+      const createdDebts = [];
       const debtorImportKey = getDebtorImportKey({ cpfCnpj: docNorm, cliente: cleanName, lead: lead._id });
-      const chargeBaseKey = getChargeImportKey({
-        debtorImportKey,
-        contrato,
-        vencimento: dueDate,
-        parcela: parcela || 1
-      });
-      const chargeImportKey = `${chargeBaseKey}|manual:${Date.now()}`;
-      const today = new Date();
-      const computedDelay = Math.max(0, Math.floor((today.setHours(0, 0, 0, 0) - new Date(dueDate).setHours(0, 0, 0, 0)) / 86400000));
 
-      const debt = await InadimplenciaDetalhe.create({
-        user: uid,
-        lead: lead._id,
-        importBatch: 'manual',
-        arquivoOrigem: 'MANUAL',
-        debtorImportKey,
-        chargeImportKey,
-        firstSeenBatch: 'manual',
-        lastSeenBatch: 'manual',
-        importStatus: 'novo',
-        cliente: cleanName || lead.name,
-        cpfCnpj: cpfCnpj || docNorm,
-        telefone1: primaryPhone,
-        telefone2: secondaryPhone,
-        empreendimento: String(empreendimento || '').trim(),
-        contrato: String(contrato || '').trim(),
-        vencimento: dueDate,
-        principal: principalValue || totalValue,
-        juros: jurosValue,
-        multa: multaValue,
-        total: totalValue,
-        atraso: Number.isFinite(Number(atraso)) ? Number(atraso) : computedDelay,
-        parcela: Number(parcela) || 1,
-        torre,
-        apto,
-        enderecoResidencial,
-        profissao,
-        tags: ['manual']
-      });
+      for (const d of debtsToProcess) {
+        const dueDate = parseDate(d.vencimento);
+        const pValue = roundMoney(d.principal);
+        const jValue = roundMoney(d.juros);
+        const mValue = roundMoney(d.multa);
+        const tValue = roundMoney(d.total || (pValue + jValue + mValue));
+        const contratoStr = String(d.contrato || '').trim();
+        const parcelaNum = Number(d.parcela) || 1;
 
-      res.status(201).json({ success: true, lead, debt });
+        const chargeBaseKey = getChargeImportKey({
+          debtorImportKey,
+          contrato: contratoStr,
+          vencimento: dueDate,
+          parcela: parcelaNum
+        });
+        const chargeImportKey = `${chargeBaseKey}|manual:${Date.now()}_${Math.random().toString(36).substring(7)}`;
+        const today = new Date();
+        const computedDelay = Math.max(0, Math.floor((today.setHours(0, 0, 0, 0) - new Date(dueDate).setHours(0, 0, 0, 0)) / 86400000));
+
+        const debtRecord = await InadimplenciaDetalhe.create({
+          user: uid,
+          lead: lead._id,
+          importBatch: 'manual',
+          arquivoOrigem: 'MANUAL',
+          debtorImportKey,
+          chargeImportKey,
+          firstSeenBatch: 'manual',
+          lastSeenBatch: 'manual',
+          importStatus: 'novo',
+          cliente: cleanName || lead.name,
+          cpfCnpj: cpfCnpj || docNorm,
+          telefone1: primaryPhone,
+          telefone2: secondaryPhone,
+          empreendimento: String(empreendimento || '').trim(),
+          contrato: contratoStr,
+          vencimento: dueDate,
+          principal: pValue || tValue,
+          juros: jValue,
+          multa: mValue,
+          total: tValue,
+          atraso: Number.isFinite(Number(d.atraso)) ? Number(d.atraso) : computedDelay,
+          parcela: parcelaNum,
+          torre,
+          apto,
+          enderecoResidencial,
+          profissao,
+          tags: ['manual']
+        });
+        createdDebts.push(debtRecord);
+      }
+
+      res.status(201).json({ success: true, lead, debts: createdDebts });
     } catch (e) {
       logger.error('[createManualDebtor] Erro:', e);
       res.status(500).json({ message: e.message || 'Erro ao criar devedor manual.' });
@@ -2015,6 +2040,16 @@ class SpreadsheetController {
           doc.text(reportStatus, columns[3].x, y, { width: columns[3].width, ellipsis: true });
           doc.text(total, columns[4].x, y, { width: columns[4].width, align: 'right' });
           doc.y = y + 18;
+
+          if (req.query.includeNotes === 'true' && d.leadInfo?.debtorNotes && d.leadInfo.debtorNotes.length > 0) {
+            const notesText = 'Notas: ' + d.leadInfo.debtorNotes.map(n => n.content).join(' | ');
+            if (doc.y > 760) {
+              doc.addPage();
+              drawHeader();
+            }
+            doc.fillColor('#64748b').fontSize(7).font('Helvetica-Oblique').text(notesText, columns[0].x, doc.y, { width: 500 });
+            doc.y += 10;
+          }
         });
 
         doc.end();
