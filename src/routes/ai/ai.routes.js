@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const aiController = require('../../controllers/ai/ai.controller');
 const auth = require('../../middleware/auth');
+const requireComplianceDocument = require('../../middleware/requireComplianceDocument');
 const { body, validationResult } = require('express-validator');
 
 const validateRequest = (req, res, next) => {
@@ -14,6 +15,7 @@ const validateRequest = (req, res, next) => {
 
 router.post('/conversation/start',
   auth,
+  requireComplianceDocument,
   [
     body('leadId').isMongoId().withMessage('ID do lead invalido'),
     body('channel').isIn(['email', 'whatsapp', 'chat', 'linkedin']).withMessage('Canal invalido'),
@@ -26,6 +28,7 @@ router.post('/conversation/start',
 
 router.post('/conversation/start-multiple',
   auth,
+  requireComplianceDocument,
   [
     body('leadIds').isArray({ min: 1 }).withMessage('leadIds deve ser um array com pelo menos um item'),
     body('leadIds.*').isMongoId().withMessage('ID de lead invalido no array'),
@@ -39,6 +42,7 @@ router.post('/conversation/start-multiple',
 
 router.post('/conversation/response',
   auth,
+  requireComplianceDocument,
   [
     body('conversationId').isMongoId().withMessage('ID da conversa invalido'),
     body('message').isString().withMessage('Mensagem e obrigatoria'),

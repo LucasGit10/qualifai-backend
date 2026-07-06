@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const evolutionController = require('../../controllers/integrations/evolution.controller');
 const auth = require('../../middleware/auth');
+const requireComplianceDocument = require('../../middleware/requireComplianceDocument');
 
 // Validações
 const validateCreateInstance = [
@@ -50,6 +51,6 @@ router.delete('/instance/:instanceName', auth, evolutionController.deleteInstanc
 router.post('/instance/:instanceName/reactivate', auth, evolutionController.reactivateInstance);
 router.post('/instance/:instanceName/restart', auth, evolutionController.restartInstance);
 // Enviar mensagens
-router.post('/instance/:instanceName/send', auth, validateSendMessage, evolutionController.sendMessage);
+router.post('/instance/:instanceName/send', auth, requireComplianceDocument, validateSendMessage, evolutionController.sendMessage);
 router.post('/instance/:instanceName/webhook', auth, evolutionController.updateWebhook);
 module.exports = router;

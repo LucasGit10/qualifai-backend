@@ -8,6 +8,7 @@ const logger = require('../utils/logger');
 const socketHub = require('../utils/socketHub');
 const { findReusableConversation, touchOutboundConversation } = require('./conversationReuseService');
 const AppError = require('../utils/AppError');
+const { hasActiveComplianceDocument } = require('./complianceService');
 
 function renderTemplate(value = '', lead = {}) {
   const variables = {
@@ -52,6 +53,10 @@ class NextActionService {
     try {
       if (!user || !message) {
         throw new AppError('Lead sem usuário associado ou sem mensagem agendada configurada.', 422, 'LEAD_NO_USER_OR_MESSAGE');
+      }
+
+      if (!(await hasActiveComplianceDocument(user))) {
+        throw new AppError('Documento de permissao/base legal ausente. Envio agendado bloqueado ate anexar o comprovante.', 403, 'COMPLIANCE_DOCUMENT_REQUIRED');
       }
 
       if (channel === 'whatsapp' && !lead.phone) {

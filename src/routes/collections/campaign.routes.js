@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const campaignController = require('../../controllers/collections/campaign.controller');
 const auth = require('../../middleware/auth');
+const requireComplianceDocument = require('../../middleware/requireComplianceDocument');
 
 // Aplicar autenticação a todas as rotas
 router.use(auth);
@@ -19,7 +20,7 @@ router.get('/:id', campaignController.getById);
 router.post('/:id/contacts/upload', campaignController.uploadContacts);
 
 // Iniciar campanha
-router.post('/:id/start', campaignController.start);
+router.post('/:id/start', requireComplianceDocument, campaignController.start);
 
 // Pausar campanha
 router.post('/:id/pause', campaignController.pause);

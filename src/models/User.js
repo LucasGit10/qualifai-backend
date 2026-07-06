@@ -348,6 +348,14 @@ Exemplo de abordagem inicial:
   oneSignalSubscriptionId: {
     type: String,
     trim: true
+  },
+  compliance: {
+    document: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ComplianceDocument'
+    },
+    documentUploadedAt: Date,
+    documentApprovedAt: Date
   }
 }, {
   timestamps: true

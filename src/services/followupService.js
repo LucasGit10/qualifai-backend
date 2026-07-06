@@ -5,6 +5,7 @@ const aiController = require('../controllers/ai/ai.controller');
 const aiService = require('./aiService');
 const logger = require('../utils/logger');
 const socketHub = require('../utils/socketHub');
+const { hasActiveComplianceDocument } = require('./complianceService');
 
 class FollowupService {
   async checkAndSendFollowups() {
@@ -42,6 +43,14 @@ class FollowupService {
         if (!lead || !user) {
             // logger.warn(`[DEBUG-SERVICE] Conversa ${conversation._id} ignorada: Lead ou Usuário não encontrado.`);
             continue;
+        }
+
+        if (!(await hasActiveComplianceDocument(user))) {
+          conversation.followup.nextAttemptAt = null;
+          conversation.followup.message = undefined;
+          await conversation.save();
+          logger.warn('[Followup] Conversa ' + conversation._id + ' bloqueada por ausencia de documento de compliance.');
+          continue;
         }
 
         if (

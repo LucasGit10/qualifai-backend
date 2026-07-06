@@ -3,9 +3,10 @@ const express = require('express');
 const router = express.Router();
 const voiceAgentController = require('../../controllers/ai/voice-agent.controller'); 
 const authMiddleware = require('../../middleware/auth'); // Se necessário para startCall
+const requireComplianceDocument = require('../../middleware/requireComplianceDocument');
 
 // Rota para iniciar a chamada (protegida por autenticação, provavelmente)
-router.post('/start-call', authMiddleware, voiceAgentController.startCall);
+router.post('/start-call', authMiddleware, requireComplianceDocument, voiceAgentController.startCall);
 
 // Rota para o Twilio obter o TwiML inicial (GET ou POST, depende do Twilio)
 router.post('/twiml', voiceAgentController.generateTwiml); // Twilio geralmente usa POST

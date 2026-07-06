@@ -64,6 +64,7 @@ const rankingRoutes         = require('./routes/platform/ranking.routes');
 const performanceReportRoutes = require('./routes/platform/performance-report.routes');
 const supportRoutes         = require('./routes/platform/support.routes');
 const webhookRoutes         = require('./routes/platform/webhooks.routes');
+const complianceRoutes      = require('./routes/platform/compliance.routes');
 
 // ── Routes: Billing ───────────────────────────────────────────────────────────
 const paymentRoutes         = require('./routes/billing/payment.routes');
@@ -219,6 +220,7 @@ app.use('/api/ranking',        rankingRoutes);
 app.use('/api/reports',        performanceReportRoutes);
 app.use('/api/support',        supportRoutes);
 app.use('/api/webhooks',       webhookRoutes);
+app.use('/api/compliance',     complianceRoutes);
 
 // ── Billing ───────────────────────────────────────────────────────────────────
 app.use('/api/payments', paymentRoutes);

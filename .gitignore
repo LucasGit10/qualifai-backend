@@ -145,3 +145,5 @@ hubspot.config.yml
 j.json
 .env.prod
 j.json
+
+storage/

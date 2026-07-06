@@ -1955,7 +1955,8 @@ class SpreadsheetController {
 
       const debtors = await InadimplenciaDetalhe.aggregate([
         { $match: matchStage },
-        { $sort: { updatedAt: -1 } },
+        { $set: { _isActiveCharge: { $and: [{ $ne: ["$importStatus", "saiu"] }, { $ne: ["$status", "pago"] }] } } },
+        { $sort: { _isActiveCharge: -1, updatedAt: -1 } },
         {
           $group: {
             _id: "$lead",
@@ -1967,8 +1968,8 @@ class SpreadsheetController {
             importStatus: { $first: "$importStatus" },
             lastSeenBatch: { $first: "$lastSeenBatch" },
             exitedInBatch: { $first: "$exitedInBatch" },
-            totalPrincipal: { $sum: "$principal" },
-            totalGeral: { $sum: "$total" }
+            totalPrincipal: { $sum: { $cond: ["$_isActiveCharge", "$principal", 0] } },
+            totalGeral: { $sum: { $cond: ["$_isActiveCharge", "$total", 0] } }
           }
         },
         { $lookup: { from: 'leads', localField: '_id', foreignField: '_id', as: 'leadInfo' } },

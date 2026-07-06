@@ -5,6 +5,7 @@ const Campaign = getModel('Campaign');
 const logger = require('../utils/logger');
 const aiController = require('../controllers/ai/ai.controller');
 const socketHub = require('../utils/socketHub');
+const { hasActiveComplianceDocument } = require('./complianceService');
 
 class CampaignFollowupService {
   async processCampaignFollowups() {
@@ -24,6 +25,10 @@ class CampaignFollowupService {
       }
 
       for (const campaign of activeCampaigns) {
+        if (!(await hasActiveComplianceDocument(campaign.user))) {
+          logger.warn('[C-FOLLOWUP] Campanha ' + campaign._id + ' bloqueada por ausencia de documento de compliance.');
+          continue;
+        }
         const contactsToSend = campaign.contacts.filter(contact =>
           contact.followUpStatus &&
           contact.followUpStatus.nextAttemptAt &&
