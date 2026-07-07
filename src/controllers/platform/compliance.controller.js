@@ -27,9 +27,15 @@ class ComplianceController {
         .sort({ uploadedAt: -1 })
         .lean();
 
+      const user = await User.findById(req.user.id).select('compliance').lean();
+      const exempted = Boolean(user?.compliance?.exemptedAt);
+
       res.json({
-        required: true,
-        completed: Boolean(document),
+        required: !exempted,
+        completed: Boolean(document) || exempted,
+        exempted,
+        exemptionReason: user?.compliance?.exemptionReason || '',
+        exemptedAt: user?.compliance?.exemptedAt,
         document: buildDocumentResponse(document)
       });
     } catch (error) {
@@ -74,6 +80,30 @@ class ComplianceController {
     }
   }
 
+
+  async exemptAccount(req, res) {
+    try {
+      const now = new Date();
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 500) : '';
+
+      const user = await User.findByIdAndUpdate(
+        req.user.id,
+        {
+          'compliance.exemptedAt': now,
+          'compliance.exemptionReason': reason || 'Conta liberada sem documento pelo usuario.'
+        },
+        { new: true }
+      );
+
+      res.json({
+        success: true,
+        message: 'Conta liberada sem exigencia de documento.',
+        compliance: user.compliance
+      });
+    } catch (error) {
+      return handleControllerError(res, error, 'ao liberar conta sem documento de compliance');
+    }
+  }
   async downloadDocument(req, res) {
     try {
       const document = await ComplianceDocument.findOne({ user: req.user.id, status: 'active' })

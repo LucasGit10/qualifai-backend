@@ -6,7 +6,7 @@ async function hasActiveComplianceDocument(userOrId) {
   const userId = userOrId?._id || userOrId?.id || userOrId;
   if (!userId) return false;
 
-  if (userOrId?.compliance?.documentApprovedAt) return true;
+  if (userOrId?.compliance?.documentApprovedAt || userOrId?.compliance?.exemptedAt) return true;
 
   const activeDocument = await ComplianceDocument.exists({
     user: userId,

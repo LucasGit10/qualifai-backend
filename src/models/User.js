@@ -355,7 +355,9 @@ Exemplo de abordagem inicial:
       ref: 'ComplianceDocument'
     },
     documentUploadedAt: Date,
-    documentApprovedAt: Date
+    documentApprovedAt: Date,
+    exemptedAt: Date,
+    exemptionReason: { type: String, trim: true, maxlength: 500 }
   }
 }, {
   timestamps: true

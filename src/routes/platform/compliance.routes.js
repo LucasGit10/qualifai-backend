@@ -38,6 +38,7 @@ const upload = multer({
 
 router.get('/status', auth, complianceController.getStatus);
 router.post('/document', auth, upload.single('document'), complianceController.uploadDocument);
+router.post('/exempt', auth, complianceController.exemptAccount);
 router.get('/document/download', auth, complianceController.downloadDocument);
 
 module.exports = router;
