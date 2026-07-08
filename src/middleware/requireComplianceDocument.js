@@ -9,19 +9,20 @@ const requiresOutboundCompliance = (req) => {
 };
 
 const requireComplianceDocument = async (req, res, next) => {
-  try {
-    if (!requiresOutboundCompliance(req)) return next();
+  // Compliance document requirement temporarily disabled — always allow.
+  return next();
 
-    if (await hasActiveComplianceDocument(req.user)) return next();
-
-    return res.status(403).json({
-      code: 'COMPLIANCE_DOCUMENT_REQUIRED',
-      message: REQUIRED_MESSAGE,
-      requiresComplianceDocument: true
-    });
-  } catch (error) {
-    return next(error);
-  }
+  // try {
+  //   if (!requiresOutboundCompliance(req)) return next();
+  //   if (await hasActiveComplianceDocument(req.user)) return next();
+  //   return res.status(403).json({
+  //     code: 'COMPLIANCE_DOCUMENT_REQUIRED',
+  //     message: REQUIRED_MESSAGE,
+  //     requiresComplianceDocument: true
+  //   });
+  // } catch (error) {
+  //   return next(error);
+  // }
 };
 
 module.exports = requireComplianceDocument;
