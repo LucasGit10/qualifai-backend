@@ -8,7 +8,7 @@ const mime = require('mime-types');
 const logger = require('../utils/logger');
 const AppError = require('../utils/AppError');
 
-const API_VERSION = 'v23.0'; // Usando uma versão mais recente
+const API_VERSION = 'v26.0';
 const REQUEST_TIMEOUT = 15000; // Timeout de 15 segundos
 
 // Agente HTTPS para forçar IPv4, ajuda a evitar erros de timeout EADDRNOTAVAIL
@@ -318,57 +318,36 @@ async function downloadMedia(mediaUrl, token) {
 }
 
 /**
- * Troca um token de acesso de curta duração por um de longa duração.
+ * Troca o código de autorização do Embedded Signup por um token BISU e
+ * resolve exatamente os ativos selecionados pelo cliente.
  */
-async function exchangeForLongLivedToken(shortLivedToken) {
-  const GRAPH_API_URL = `https://graph.facebook.com/${API_VERSION}`;
-  const APP_ID = process.env.META_APP_ID;
-  const APP_SECRET = process.env.META_APP_SECRET;
-
-  try {
-    const response = await axios.get(`${GRAPH_API_URL}/oauth/access_token`, {
-      params: {
-        grant_type: 'fb_exchange_token',
-        client_id: APP_ID,
-        client_secret: APP_SECRET,
-        fb_exchange_token: shortLivedToken
-      },
-      httpsAgent,
-    });
-    return response.data.access_token;
-  } catch (error) {
-    logger.error('Erro ao trocar token de curta duração por longa duração:', error.response?.data || error.message);
-    throw new AppError('Falha ao obter token de longa duração da Meta. Verifique as credenciais do app (META_APP_ID / META_APP_SECRET).', 502);
-  }
-}
-
-/**
- * Troca o código de autorização de curta duração por um token de acesso.
- */
-async function exchangeCodeForTokensAndInfo(code) {
+async function exchangeCodeForTokensAndInfo(code, selectedAssets) {
   try {
     const GRAPH_API_URL = `https://graph.facebook.com/${API_VERSION}`;
     const APP_ID = process.env.META_APP_ID;
     const APP_SECRET = process.env.META_APP_SECRET;
 
+    if (!APP_ID || !APP_SECRET) {
+      throw new AppError('META_APP_ID e META_APP_SECRET devem estar configurados no backend.', 500);
+    }
+
     const tokenResponse = await axios.get(`${GRAPH_API_URL}/oauth/access_token`, {
       params: { client_id: APP_ID, client_secret: APP_SECRET, code },
       httpsAgent,
+      timeout: REQUEST_TIMEOUT
     });
-    const userAccessToken = tokenResponse.data.access_token;
-    if (!userAccessToken) {
-      throw new AppError('Não foi possível obter o token de acesso da Meta a partir do código de autorização. O código pode já ter sido usado ou ter expirado.', 401);
+    const businessAccessToken = tokenResponse.data.access_token;
+    if (!businessAccessToken) {
+      throw new AppError('Não foi possível obter o token de acesso da Meta. O código pode ter expirado ou já ter sido usado.', 401);
     }
 
-    return await getConnectionDetailsFromToken(userAccessToken);
-    
+    return await getConnectionDetailsFromToken(businessAccessToken, selectedAssets);
   } catch (error) {
     if (error instanceof AppError) throw error;
     logger.error('Erro no fluxo de troca de código do WhatsApp:', error.response?.data || error.message);
-    throw new AppError('Falha ao comunicar com a API da Meta para obter detalhes da conta a partir do código. Tente o fluxo de autorização novamente.', 502);
+    throw new AppError('Falha ao comunicar com a API da Meta para concluir o cadastro incorporado.', 502);
   }
 }
-
 /**
  * Envia uma mensagem de template via WhatsApp.
  * (Funciona para MARKETING (MM Lite), UTILITY, etc.)
@@ -547,70 +526,78 @@ async function sendReplyButtonsMessage(instance, to, bodyText, buttons) {
 /**
  * Obtém detalhes da conta do WhatsApp Business usando um Access Token.
  */
-async function getConnectionDetailsFromToken(accessToken) {
+async function getConnectionDetailsFromToken(accessToken, selectedAssets = {}) {
     try {
         const GRAPH_API_URL = `https://graph.facebook.com/${API_VERSION}`;
         const APP_ID = process.env.META_APP_ID;
         const APP_SECRET = process.env.META_APP_SECRET;
+        const requestedWabaId = String(selectedAssets.wabaId || '');
+        const requestedPhoneNumberId = String(selectedAssets.phoneNumberId || '');
+
+        if (!/^\d+$/.test(requestedWabaId) || !/^\d+$/.test(requestedPhoneNumberId)) {
+            throw new AppError('WABA ID e Phone Number ID válidos são obrigatórios para concluir o cadastro incorporado.', 400);
+        }
+        if (!APP_ID || !APP_SECRET) {
+            throw new AppError('META_APP_ID e META_APP_SECRET devem estar configurados no backend.', 500);
+        }
 
         const debugResponse = await axios.get(`${GRAPH_API_URL}/debug_token`, {
             params: { input_token: accessToken, access_token: `${APP_ID}|${APP_SECRET}` },
             httpsAgent,
+            timeout: REQUEST_TIMEOUT
         });
         const tokenData = debugResponse.data.data;
         if (!tokenData || !tokenData.is_valid) {
-        throw new AppError('Token de acesso Meta inválido ou expirado. Reconecte a instância do WhatsApp.', 401);
+            throw new AppError('Token de acesso Meta inválido ou expirado. Reconecte a instância do WhatsApp.', 401);
+        }
+        if (String(tokenData.app_id) !== String(APP_ID)) {
+            throw new AppError('O token retornado pela Meta pertence a outra aplicação.', 403);
         }
 
         const granularScopes = tokenData.granular_scopes || [];
         const wabaScope = granularScopes.find(scope => scope.scope === 'whatsapp_business_management');
-        if (!wabaScope || !wabaScope.target_ids || wabaScope.target_ids.length === 0) {
-        throw new AppError('Permissão "whatsapp_business_management" não concedida ou WABA ID ausente no token. Refaça a autorização do app na Meta.', 403);
-        }
-        const wabaId = wabaScope.target_ids[0];
-
-        let longLivedToken = accessToken;
-        // data_access_expires_at === 0 significa que já é de longa duração
-        if (tokenData.data_access_expires_at !== 0) { 
-            logger.info('Token de curta duração detectado, trocando por um de longa duração.');
-            longLivedToken = await exchangeForLongLivedToken(accessToken);
-        } else {
-            logger.info('Token de longa duração já recebido.');
+        const allowedWabaIds = (wabaScope?.target_ids || []).map(String);
+        if (!allowedWabaIds.includes(requestedWabaId)) {
+            throw new AppError('O WABA selecionado não foi compartilhado com esta aplicação.', 403);
         }
 
-        const phoneNumbersResponse = await axios.get(`${GRAPH_API_URL}/${wabaId}/phone_numbers`, {
-            params: { access_token: longLivedToken },
+        const phoneNumbersResponse = await axios.get(`${GRAPH_API_URL}/${requestedWabaId}/phone_numbers`, {
+            params: {
+                access_token: accessToken,
+                fields: 'id,display_phone_number,verified_name,code_verification_status,platform_type,status'
+            },
             httpsAgent,
+            timeout: REQUEST_TIMEOUT
         });
-        const phoneNumbers = phoneNumbersResponse.data?.data;
-        if (!phoneNumbers || phoneNumbers.length === 0) {
-            logger.warn(`[Meta API] Nenhum número de telefone encontrado para o WABA ID: ${wabaId}.`, { response: phoneNumbersResponse.data });
-            throw new AppError('Nenhum número de telefone foi encontrado para esta conta do WhatsApp na Meta. Verifique se o número está registrado e verificado na conta Business.', 404);
+        const phoneData = phoneNumbersResponse.data?.data?.find(
+            phone => String(phone.id) === requestedPhoneNumberId
+        );
+        if (!phoneData) {
+            throw new AppError('O número selecionado não pertence ao WABA compartilhado ou não está acessível.', 403);
         }
-        
-        // Prioriza números já verificados
-        const phoneData = phoneNumbers.find(p => p.code_verification_status === 'VERIFIED') || phoneNumbers[0];
-        
-        const result = {
-            accessToken: longLivedToken,
-            phoneNumberId: phoneData.id,
-            phoneNumber: `+${phoneData.display_phone_number.replace(/\s/g, '')}`,
-            displayName: phoneData.verified_name,
-            wabaId: wabaId,
-        };
-        logger.info('Detalhes da conexão com WhatsApp obtidos com sucesso via token.', result);
-        return result;
 
+        const displayPhoneNumber = String(phoneData.display_phone_number || '').replace(/\s/g, '');
+        const result = {
+            accessToken,
+            phoneNumberId: requestedPhoneNumberId,
+            phoneNumber: displayPhoneNumber ? `+${displayPhoneNumber.replace(/^\+/, '')}` : '',
+            displayName: phoneData.verified_name || displayPhoneNumber || requestedPhoneNumberId,
+            wabaId: requestedWabaId,
+        };
+        logger.info('Ativos do Embedded Signup validados com sucesso.', {
+            phoneNumberId: result.phoneNumberId,
+            wabaId: result.wabaId
+        });
+        return result;
     } catch (error) {
         if (error instanceof AppError) throw error;
-        logger.error('Erro no fluxo de obtenção de token do WhatsApp:', error.response?.data || error.message);
-        throw new AppError('Falha ao comunicar com a API da Meta para obter detalhes da conta. Verifique o token e tente novamente.', 502);
+        logger.error('Erro ao validar os ativos do Embedded Signup:', error.response?.data || error.message);
+        throw new AppError('Falha ao comunicar com a API da Meta para validar a conta selecionada.', 502);
     }
 }
-
 /**
  * Registra um número de telefone com a API da Meta Cloud.
- * (PIN é usado para migração, pode ser um PIN fixo ou variável)
+ * O PIN é gerenciado pelo provedor no backend e nunca solicitado ao cliente.
  */
 async function subscribeWabaToWebhooks(wabaId, token) {
   if (!wabaId || !token) {
@@ -669,7 +656,7 @@ async function getPhoneNumberStatus(phoneNumberId, token) {
 
 async function registerPhoneNumber(phoneNumberId, token, pin = process.env.WHATSAPP_REGISTRATION_PIN) {
   if (!/^\d{6}$/.test(String(pin || ''))) {
-    throw new Error('O PIN de registro do WhatsApp deve conter exatamente 6 dígitos.');
+    throw new AppError('WHATSAPP_REGISTRATION_PIN deve conter exatamente 6 dígitos no backend.', 500);
   }
 
   const url = `https://graph.facebook.com/${API_VERSION}/${phoneNumberId}/register`;

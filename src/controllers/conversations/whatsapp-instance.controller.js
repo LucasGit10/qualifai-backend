@@ -14,73 +14,46 @@ const AppError = require('../../utils/AppError');
 const { handleControllerError } = require('../../utils/errorUtils');
 
 async function completeOnboarding(req, res) {
-    logger.info('[Onboarding] Iniciando processamento do onboarding do WhatsApp.');
-    try {
-        const { code, accessToken, registrationPin } = req.body;
+    logger.info('[Onboarding] Iniciando processamento do cadastro incorporado do WhatsApp.');
 
-        logger.info('[Onboarding] Dados recebidos:', {
-            hasCode: !!code,
-            hasAccessToken: !!accessToken,
-            codeLength: code ? code.length : 0,
-            bodyKeys: Object.keys(req.body),
-            userId: req.user?._id
+    try {
+        if (!req.user || !req.user._id) {
+            throw new AppError('Usuário não autenticado.', 401);
+        }
+
+        const { code, wabaId, phoneNumberId } = req.body;
+        const selectedAssets = {
+            wabaId: String(wabaId || ''),
+            phoneNumberId: String(phoneNumberId || '')
+        };
+
+        logger.info('[Onboarding] Dados de sessão recebidos.', {
+            hasCode: Boolean(code),
+            wabaId: selectedAssets.wabaId,
+            phoneNumberId: selectedAssets.phoneNumberId,
+            userId: req.user._id
         });
 
-        if (!req.user || !req.user._id) {
-            logger.error('[Onboarding] Usuário não autenticado ou sem ID.');
-            return res.status(401).json({ error: 'Usuário não autenticado' });
+        if (!code) {
+            throw new AppError('O código de autorização do cadastro incorporado é obrigatório.', 400);
+        }
+        if (!/^\d+$/.test(selectedAssets.wabaId) || !/^\d+$/.test(selectedAssets.phoneNumberId)) {
+            throw new AppError('A Meta não retornou identificadores válidos para a conta e o número selecionados.', 400);
         }
 
-        let connectionDetails;
+        const connectionDetails = await whatsappService.exchangeCodeForTokensAndInfo(
+            code,
+            selectedAssets
+        );
 
-        if (code) {
-            logger.info('[Onboarding] Código de autorização recebido. Trocando por token na Meta.');
-            try {
-                connectionDetails = await whatsappService.exchangeCodeForTokensAndInfo(code);
-                logger.info('[Onboarding] exchangeCodeForTokensAndInfo executado com sucesso.');
-            } catch (exchangeError) {
-                logger.error('[Onboarding] Erro ao trocar código por token:', {
-                    message: exchangeError.message,
-                    stack: exchangeError.stack
-                });
-                throw exchangeError;
-            }
-        } else if (accessToken) {
-            logger.info('[Onboarding] Access token recebido. Obtendo detalhes da conexão diretamente.');
-            try {
-                connectionDetails = await whatsappService.getConnectionDetailsFromToken(accessToken);
-                logger.info('[Onboarding] getConnectionDetailsFromToken executado com sucesso.');
-            } catch (tokenError) {
-                logger.error('[Onboarding] Erro ao obter detalhes do token:', {
-                    message: tokenError.message,
-                    stack: tokenError.stack
-                });
-                throw tokenError;
-            }
-        } else {
-            logger.error('[Onboarding] FALHA: Nem "code" nem "accessToken" foram fornecidos.');
-            return res.status(400).json({ error: 'O código de autorização ou o token de acesso é obrigatório.' });
-        }
-
-        if (!connectionDetails) {
-            logger.error('[Onboarding] connectionDetails está vazio ou undefined após chamada ao service.');
-            return res.status(500).json({ error: 'Falha ao obter detalhes da conexão - dados vazios retornados.' });
-        }
-
-        const requiredFields = ['phoneNumberId', 'accessToken', 'displayName'];
-        const missingFields = requiredFields.filter(field => !connectionDetails[field]);
-
+        const requiredFields = ['phoneNumberId', 'wabaId', 'accessToken', 'displayName'];
+        const missingFields = requiredFields.filter(field => !connectionDetails?.[field]);
         if (missingFields.length > 0) {
-            logger.error('[Onboarding] Campos obrigatórios ausentes nos detalhes da conexão:', {
-                missingFields,
-                connectionDetails: Object.keys(connectionDetails)
-            });
-            return res.status(500).json({
-                error: `Dados de conexão incompletos. Campos ausentes: ${missingFields.join(', ')}`
-            });
+            throw new AppError(
+                `Dados de conexão incompletos. Campos ausentes: ${missingFields.join(', ')}`,
+                502
+            );
         }
-
-        logger.info('[Onboarding] Detalhes da conexão validados. Conferindo registro do número na Cloud API.');
 
         let phoneStatus = await whatsappService.getPhoneNumberStatus(
             connectionDetails.phoneNumberId,
@@ -90,7 +63,7 @@ async function completeOnboarding(req, res) {
             && phoneStatus.status === 'CONNECTED';
 
         if (!isCloudApiConnected) {
-            logger.warn('[Onboarding] Número ainda não conectado à Cloud API. Executando registro.', {
+            logger.info('[Onboarding] Registrando o número selecionado na Cloud API.', {
                 phoneNumberId: connectionDetails.phoneNumberId,
                 platformType: phoneStatus.platform_type,
                 status: phoneStatus.status
@@ -98,7 +71,7 @@ async function completeOnboarding(req, res) {
             await whatsappService.registerPhoneNumber(
                 connectionDetails.phoneNumberId,
                 connectionDetails.accessToken,
-                registrationPin || process.env.WHATSAPP_REGISTRATION_PIN
+                process.env.WHATSAPP_REGISTRATION_PIN
             );
             phoneStatus = await whatsappService.getPhoneNumberStatus(
                 connectionDetails.phoneNumberId,
@@ -109,88 +82,70 @@ async function completeOnboarding(req, res) {
         }
 
         if (!isCloudApiConnected) {
-            throw new Error(`A Meta ainda não confirmou o número na Cloud API (status: ${phoneStatus.status || 'desconhecido'}).`);
+            throw new AppError(
+                `A Meta ainda não confirmou o número na Cloud API (status: ${phoneStatus.status || 'desconhecido'}).`,
+                409
+            );
         }
 
-        logger.info('[Onboarding] Número confirmado na Cloud API. Salvando no banco de dados.');
+        const instance = await WhatsAppInstance.findOneAndUpdate(
+            { phoneNumberId: connectionDetails.phoneNumberId, user: req.user._id },
+            {
+                $set: {
+                    instanceName: connectionDetails.displayName,
+                    phoneNumber: connectionDetails.phoneNumber || '',
+                    phoneNumberId: connectionDetails.phoneNumberId,
+                    wabaId: connectionDetails.wabaId,
+                    status: 'connected',
+                    apiCredentials: { token: connectionDetails.accessToken },
+                    user: req.user._id,
+                    lastConnection: new Date()
+                },
+            },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+
+        if (!instance) {
+            throw new AppError('Falha ao salvar a conexão do WhatsApp.', 500);
+        }
 
         try {
-            const instance = await WhatsAppInstance.findOneAndUpdate(
-                { phoneNumberId: connectionDetails.phoneNumberId, user: req.user._id },
-                {
-                    $set: {
-                        instanceName: connectionDetails.displayName,
-                        phoneNumber: connectionDetails.phoneNumber || '',
-                        wabaId: connectionDetails.wabaId || '',
-                        status: 'connected',
-                        apiCredentials: { token: connectionDetails.accessToken },
-                        user: req.user._id,
-                        lastConnection: new Date()
-                    },
-                },
-                { new: true, upsert: true, setDefaultsOnInsert: true }
+            await whatsappService.subscribeWabaToWebhooks(
+                instance.wabaId,
+                instance.apiCredentials?.token
             );
-
-            if (!instance) {
-                logger.error('[Onboarding] Falha ao criar/atualizar instância no banco de dados.');
-                return res.status(500).json({ error: 'Falha ao salvar instância no banco de dados' });
-            }
-
-            logger.info(`[Onboarding] Instância ${instance.instanceName} salva com sucesso para o usuário ${req.user._id}.`);
-            try {
-                await whatsappService.subscribeWabaToWebhooks(instance.wabaId, instance.apiCredentials?.token);
-            } catch (subscribeError) {
-                logger.warn('[Onboarding] Instância salva, mas não foi possível inscrever o app no WABA para webhooks reais.', {
-                    instanceId: instance._id,
-                    wabaId: instance.wabaId,
-                    error: subscribeError.message
-                });
-            }
-
-            res.status(201).json({
-                _id: instance._id,
-                instanceName: instance.instanceName,
-                phoneNumber: instance.phoneNumber,
-                phoneNumberId: instance.phoneNumberId,
+        } catch (subscribeError) {
+            logger.warn('[Onboarding] Conexão salva, mas a inscrição automática no webhook falhou.', {
+                instanceId: instance._id,
                 wabaId: instance.wabaId,
-                status: instance.status,
-                createdAt: instance.createdAt,
-                updatedAt: instance.updatedAt
+                error: subscribeError.message
             });
-
-        } catch (dbError) {
-            logger.error('[Onboarding] Erro ao salvar no banco de dados:', {
-                message: dbError.message,
-                stack: dbError.stack
-            });
-            return res.status(500).json({ error: 'Erro interno do banco de dados' });
         }
 
+        return res.status(201).json({
+            _id: instance._id,
+            instanceName: instance.instanceName,
+            phoneNumber: instance.phoneNumber,
+            phoneNumberId: instance.phoneNumberId,
+            wabaId: instance.wabaId,
+            status: instance.status,
+            createdAt: instance.createdAt,
+            updatedAt: instance.updatedAt
+        });
     } catch (err) {
-        logger.error("[Onboarding] ERRO FATAL no fluxo de conexão:", {
+        const statusCode = err instanceof AppError ? err.statusCode : 500;
+        const errorMessage = err instanceof AppError
+            ? err.message
+            : 'Falha ao conectar canal do WhatsApp.';
+
+        logger.error('[Onboarding] Falha ao concluir o cadastro incorporado.', {
             message: err.message,
-            stack: err.stack,
-            requestBody: req.body,
+            statusCode,
+            bodyKeys: Object.keys(req.body || {}),
             userId: req.user?._id
         });
 
-        let errorMessage = 'Falha ao conectar canal do WhatsApp.';
-        let statusCode = 500;
-
-        if (err.message.includes('META_APP_ID') || err.message.includes('META_APP_SECRET')) {
-            errorMessage = 'Configuração da aplicação Meta incorreta.';
-        } else if (err.message.includes('token')) {
-            errorMessage = 'Token de acesso inválido ou expirado.';
-            statusCode = 401;
-        } else if (err.message.includes('code')) {
-            errorMessage = 'Código de autorização inválido.';
-            statusCode = 400;
-        } else if (err.message.includes('PIN')) {
-            errorMessage = err.message;
-            statusCode = 400;
-        }
-
-        res.status(statusCode).json({
+        return res.status(statusCode).json({
             error: errorMessage,
             details: process.env.NODE_ENV === 'development' ? err.message : undefined
         });
@@ -579,10 +534,15 @@ async function listReceivedMessages(req, res) {
 }
 
 async function verifyWebhook(req, res) {
-    const VERIFY_TOKEN = 'ajndakndkandaanjdknda';
+    const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
     const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
 
-    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    if (!verifyToken) {
+        logger.error('[Webhook] WHATSAPP_VERIFY_TOKEN não está configurado.');
+        return res.sendStatus(500);
+    }
+
+    if (mode === 'subscribe' && token === verifyToken) {
         logger.info('[Webhook] Webhook verificado com sucesso!');
         return res.status(200).send(challenge);
     }
