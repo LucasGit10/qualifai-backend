@@ -4,6 +4,7 @@ const spreadsheetController = require('../../controllers/collections/spreadsheet
 const auth = require('../../middleware/auth');
 const multer = require('multer');
 const path = require('path');
+const chunkedUpload = require('../../utils/chunkedUpload');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
@@ -21,6 +22,59 @@ const upload = multer({
     cb(new Error(`Formato não suportado: ${ext}. Use CSV ou Excel.`));
   },
   limits: { fileSize: 100 * 1024 * 1024 }
+});
+const chunkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 6 * 1024 * 1024 }
+});
+
+router.post('/import/upload/start', auth, (req, res) => {
+  try {
+    const { originalName, totalSize, totalChunks } = req.body;
+    const extension = path.extname(String(originalName || '')).toLowerCase();
+    if (!['.csv', '.xlsx', '.xls'].includes(extension)) {
+      return res.status(400).json({ message: 'Formato não suportado. Use CSV ou Excel.' });
+    }
+    if (!Number.isInteger(Number(totalChunks)) || Number(totalChunks) < 1 || Number(totalChunks) > 1000) {
+      return res.status(400).json({ message: 'Quantidade de partes invalida.' });
+    }
+    if (!Number.isFinite(Number(totalSize)) || Number(totalSize) > 100 * 1024 * 1024) {
+      return res.status(400).json({ message: 'O arquivo deve ter no maximo 100 MB.' });
+    }
+    const uploadId = chunkedUpload.startUpload({
+      userId: req.user.id,
+      originalName,
+      totalSize,
+      totalChunks
+    });
+    return res.status(201).json({ uploadId });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+});
+
+router.post('/import/upload/chunk', auth, chunkUpload.single('chunk'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'Parte do arquivo obrigatoria.' });
+    const metadata = chunkedUpload.saveChunk({
+      uploadId: req.body.uploadId,
+      userId: req.user.id,
+      chunkIndex: req.body.chunkIndex,
+      buffer: req.file.buffer
+    });
+    return res.json({ received: metadata.receivedChunks.length, total: metadata.totalChunks });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+});
+
+router.post('/import/upload/complete', auth, (req, res) => {
+  try {
+    const result = chunkedUpload.completeUpload({ uploadId: req.body.uploadId, userId: req.user.id });
+    return res.json({ uploadId: req.body.uploadId, originalName: result.originalName });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
 });
 
 // ── Importação Unificada Genérica (UPSERT) ──────────────────────────────────

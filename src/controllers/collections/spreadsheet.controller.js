@@ -20,6 +20,7 @@ const mongoose = require('mongoose');
 const { getModel } = require('../../utils/modelProvider');
 const logger = require('../../utils/logger');
 const { chatCompletion } = require('../../services/ai/handlers/chat.handler');
+const { getCompletedUpload, cleanupCompletedUpload } = require('../../utils/chunkedUpload');
 
 const Lead = getModel('Lead');
 const User = getModel('User');
@@ -703,11 +704,28 @@ const findOrCreateLead = async (userId, { cpfCnpj, nome, email, telefone, telefo
 
 class SpreadsheetController {
 
-  async previewGenericImport(req, res) {
-    if (!req.file) return res.status(400).json({ message: 'Arquivo e obrigatorio.' });
+  resolveImportFile(req) {
+    if (req.file) {
+      return { filePath: req.file.path, originalName: req.file.originalname, chunked: false };
+    }
+    if (req.body?.uploadId) {
+      const completed = getCompletedUpload({ uploadId: req.body.uploadId, userId: req.user.id });
+      return { ...completed, chunked: true };
+    }
+    return null;
+  }
 
-    const filePath = req.file.path;
-    const fileExt = path.extname(req.file.originalname).toLowerCase();
+  async previewGenericImport(req, res) {
+    let inputFile;
+    try {
+      inputFile = this.resolveImportFile(req);
+    } catch (error) {
+      return res.status(400).json({ message: error.message });
+    }
+    if (!inputFile) return res.status(400).json({ message: 'Arquivo e obrigatorio.' });
+
+    const filePath = inputFile.filePath;
+    const fileExt = path.extname(inputFile.originalName).toLowerCase();
     const io = req.app.get('io');
 
     try {
@@ -720,7 +738,7 @@ class SpreadsheetController {
       });
 
       const records = await readFileRecords(filePath, fileExt, { useAi: true });
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      if (!req.body?.preserveUpload && fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
       if (!records.length) {
         return res.status(400).json({
@@ -738,20 +756,26 @@ class SpreadsheetController {
           : 'Extracao validada sem correcoes de valores sugeridas.'
       });
     } catch (readErr) {
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      if (!req.body?.preserveUpload && fs.existsSync(filePath)) fs.unlinkSync(filePath);
       return res.status(400).json({ message: `Erro ao ler o arquivo: ${readErr.message}` });
     }
   }
 
   // â”€â”€ Importação Genérica de Planilha de Cobrança (UPSERT) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async importGeneric(req, res) {
-    if (!req.file) return res.status(400).json({ message: 'Arquivo é obrigatório.' });
-    
+    let inputFile;
+    try {
+      inputFile = this.resolveImportFile(req);
+    } catch (error) {
+      return res.status(400).json({ message: error.message });
+    }
+    if (!inputFile) return res.status(400).json({ message: 'Arquivo é obrigatório.' });
+
     const userId = req.user.id;
-    const filePath = req.file.path;
-    const fileExt = path.extname(req.file.originalname).toLowerCase();
-    const arquivoOrigem = req.body.arquivoOrigem || req.file.originalname;
-    const importBatch = `${new Date().toISOString().replace(/[:.]/g, '-')}_${req.file.originalname}`;
+    const filePath = inputFile.filePath;
+    const fileExt = path.extname(inputFile.originalName).toLowerCase();
+    const arquivoOrigem = req.body.arquivoOrigem || inputFile.originalName;
+    const importBatch = `${new Date().toISOString().replace(/[:.]/g, '-')}_${inputFile.originalName}`;
     const io = req.app.get('io');
 
     let records;
@@ -772,12 +796,14 @@ class SpreadsheetController {
       console.log(`[Import] Arquivo lido. Total de linhas: ${records.length}`);
       if (!records.length) {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        if (inputFile.chunked) cleanupCompletedUpload(req.body.uploadId);
         return res.status(400).json({
           message: 'Nenhuma linha válida encontrada. Verifique se a planilha tem colunas Cliente, Vencimento, Principal e Total.'
         });
       }
     } catch (readErr) {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      if (inputFile.chunked) cleanupCompletedUpload(req.body.uploadId);
       return res.status(400).json({ message: `Erro ao ler o arquivo: ${readErr.message}` });
     }
 
@@ -1161,6 +1187,7 @@ class SpreadsheetController {
         if (io) io.emit('spreadsheet-done', { success: false, error: e.message });
       } finally {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        if (inputFile.chunked) cleanupCompletedUpload(req.body.uploadId);
       }
     });
   }
