@@ -20,7 +20,7 @@ const upload = multer({
     if (allowed.includes(ext)) return cb(null, true);
     cb(new Error(`Formato não suportado: ${ext}. Use CSV ou Excel.`));
   },
-  limits: { fileSize: 20 * 1024 * 1024 } // 20MB
+  limits: { fileSize: 100 * 1024 * 1024 }
 });
 
 // ── Importação Unificada Genérica (UPSERT) ──────────────────────────────────

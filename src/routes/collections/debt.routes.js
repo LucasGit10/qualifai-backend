@@ -4,7 +4,10 @@ const debtController = require('../../controllers/collections/debt.controller');
 const auth = require('../../middleware/auth');
 
 const multer = require('multer');
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+	dest: 'uploads/',
+	limits: { fileSize: 100 * 1024 * 1024 }
+});
 
 router.post('/', auth, debtController.createDebt);
 router.get('/annual-summary', auth, debtController.getAnnualSummary);
