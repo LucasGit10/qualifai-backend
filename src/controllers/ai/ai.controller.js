@@ -370,7 +370,7 @@ class AIController {
                     conversationSummary = await aiService.summarizeConversation(conversation.messages, lead);
                 } catch (summaryError) {
                     logger.error('[Handoff AI Action] Erro ao gerar resumo:', summaryError);
-                    conversationSummary = 'NÃ£o foi possÃ­vel gerar o resumo automÃ¡tico.';
+                    conversationSummary = 'Não foi possível gerar o resumo automático.';
                 }
                 conversation.messages.push({
                     role: 'system',
@@ -379,7 +379,7 @@ class AIController {
                 });
                 conversation.messages.push({
                     role: 'system',
-                    content: `ðŸ“‹ RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
+                    content: `RESUMO DA CONVERSA PARA O ATENDENTE:\n${conversationSummary}`,
                     channel: conversation.channel,
                 });
             } else if (aiResult.endCall === true) {

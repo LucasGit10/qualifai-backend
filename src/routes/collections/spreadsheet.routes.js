@@ -78,8 +78,8 @@ router.post('/import/upload/complete', auth, (req, res) => {
 });
 
 // ── Importação Unificada Genérica (UPSERT) ──────────────────────────────────
-router.post('/import/preview', auth, upload.single('file'), spreadsheetController.previewGenericImport);
-router.post('/import/generic', auth, upload.single('file'), spreadsheetController.importGeneric);
+router.post('/import/preview', auth, upload.single('file'), spreadsheetController.previewGenericImport.bind(spreadsheetController));
+router.post('/import/generic', auth, upload.single('file'), spreadsheetController.importGeneric.bind(spreadsheetController));
 
 // ── Semestre / Batches ──────────────────────────────────────────────────────────
 router.get('/debtors', auth, spreadsheetController.getDebtorsSummary);
