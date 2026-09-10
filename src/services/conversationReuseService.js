@@ -110,7 +110,8 @@ const touchOutboundConversation = (conversation, { message, channel, instanceId,
     conversation.messages.push({
       role: message.role || 'ai',
       content: message.content,
-      channel
+      channel,
+      ...(message.metadata ? { metadata: message.metadata } : {})
     });
   }
 

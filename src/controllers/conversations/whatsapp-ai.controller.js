@@ -128,20 +128,20 @@ const buildTemplateComponents = (template, lead, mediaUrl = null, userSettings =
 
 class WhatsAppAIController {
 
-  // _sendMessageHelper (Mantido 100% - Sem alterações)
+  // Envia pela Meta e propaga falhas para impedir falsos positivos na interface.
   async _sendMessageHelper(lead, messagePayload, instance, userSettings) {
     try {
       if (!lead.phone) {
         logger.warn(`⚠️ [Meta API] Telefone ausente para o lead: ${lead._id}.`);
-        return;
+        throw new AppError('O lead não possui telefone para envio via WhatsApp.', 422);
       }
       if (!instance) {
         logger.warn(`⚠️ [Meta API] Instância ausente para o lead ${lead._id}.`);
-        return;
+        throw new AppError('Nenhuma instância do WhatsApp conectada para o envio.', 503);
       }
 
       if (messagePayload.type === 'template') {
-        await whatsappService.sendTemplateMessage(
+        return await whatsappService.sendTemplateMessage(
           instance,
           lead.phone,
           messagePayload.templateName,
@@ -152,12 +152,14 @@ class WhatsAppAIController {
         logger.info(`🎤 [Meta API] Convertendo resposta para voz...`);
         const audioBuffer = messagePayload.buffer || await aiService.textToSpeech(messagePayload.content, userSettings.aiConfig.voiceModel);
         const mediaId = await whatsappService.uploadMedia(instance, audioBuffer, 'audio/ogg');
-        await whatsappService.sendAudioMessage(instance, lead.phone, mediaId);
+        return await whatsappService.sendAudioMessage(instance, lead.phone, mediaId);
       } else {
-        await whatsappService.sendTextMessage(instance, lead.phone, messagePayload.content);
+        return await whatsappService.sendTextMessage(instance, lead.phone, messagePayload.content);
       }
     } catch (error) {
       logger.error(`❌ Erro ao enviar mensagem via WhatsApp Oficial para o lead ${lead._id}:`, error);
+      if (error instanceof AppError) throw error;
+      throw new AppError(error.message || 'Falha ao enviar mensagem pela Meta.', 502, 'WHATSAPP_SEND_FAILED');
     }
   }
 
@@ -194,6 +196,15 @@ class WhatsAppAIController {
       const ownerFields = await resolveConversationOwner(userId, { conversationOwnerType, teamMemberId });
       console.log(`[/whatsapp-ai/start] STEP 6 - Owner resolvido: ${JSON.stringify(ownerFields)}`);
 
+      const providerResponse = await this._sendMessageHelper(lead, {
+        type: 'template',
+        templateName: template.name,
+        languageCode: template.language,
+        components
+      }, instance, req.user.settings);
+      const providerMessageId = providerResponse?.messages?.[0]?.id;
+      console.log(`[/whatsapp-ai/start] Mensagem aceita pela Meta. wamid=${providerMessageId || 'ausente'}`);
+
       let conversation = await findReusableConversation({ userId, leadId, channel: 'whatsapp' });
       const isNewConversation = !conversation;
       console.log(`[/whatsapp-ai/start] STEP 7 - findReusableConversation: isNew=${isNewConversation} convId=${conversation?._id}`);
@@ -215,7 +226,11 @@ class WhatsAppAIController {
         ownerFields,
         message: {
           role: 'ai',
-          content: `Template "${template.name}" enviado.`
+          content: `Template ${template.name} aceito pela Meta; aguardando confirmação de entrega.`,
+          metadata: {
+            providerMessageId,
+            providerStatus: 'accepted'
+          }
         }
       });
       console.log(`[/whatsapp-ai/start] STEP 8 - touchOutboundConversation OK. Total msgs=${conversation.messages.length}`);
@@ -232,14 +247,6 @@ class WhatsAppAIController {
       await lead.save();
       console.log(`[/whatsapp-ai/start] STEP 10 - lead.save() OK`);
 
-      await this._sendMessageHelper(lead, {
-        type: 'template',
-        templateName: template.name,
-        languageCode: template.language,
-        components: components,
-      }, instance, req.user.settings);
-      console.log(`[/whatsapp-ai/start] STEP 11 - _sendMessageHelper OK`);
-
       req.app.get('io').to(`user-${userId}`).emit(isNewConversation ? 'new_conversation' : 'conversation_updated', { conversation, lead });
 
       oneSignalService.sendPushNotification(
@@ -250,7 +257,13 @@ class WhatsAppAIController {
       );
 
       console.log(`[/whatsapp-ai/start] STEP 12 - Sucesso total. convId=${conversation._id}`);
-      res.status(200).json({ success: true, message: 'Conversa iniciada com sucesso via template.', conversation });
+      res.status(200).json({
+        success: true,
+        message: 'Mensagem aceita pela Meta e aguardando confirmação de entrega.',
+        providerMessageId,
+        providerStatus: 'accepted',
+        conversation
+      });
     } catch (error) {
       console.error(`[/whatsapp-ai/start] ERRO: name=${error.name} message=${error.message}`);
       console.error(`[/whatsapp-ai/start] STACK: ${error.stack}`);
@@ -482,6 +495,15 @@ class WhatsAppAIController {
                     errorCount++;
                     continue;
                 }
+
+                const components = buildTemplateComponents(template, lead, finalMediaUrl, req.user);
+                const providerResponse = await this._sendMessageHelper(lead, {
+                    type: 'template',
+                    templateName: template.name,
+                    languageCode: template.language,
+                    components
+                }, instance, req.user.settings);
+                const providerMessageId = providerResponse?.messages?.[0]?.id;
                 
                 let conversation = await findReusableConversation({ userId, leadId, channel: 'whatsapp' });
                 if (!conversation) {
@@ -500,7 +522,11 @@ class WhatsAppAIController {
                     ownerFields,
                     message: {
                         role: 'ai',
-                        content: `Template "${template.name}" enviado.`
+                        content: `Template ${template.name} aceito pela Meta; aguardando confirmação de entrega.`,
+                        metadata: {
+                            providerMessageId,
+                            providerStatus: 'accepted'
+                        }
                     }
                 });
                 await conversation.save();
@@ -508,15 +534,6 @@ class WhatsAppAIController {
                 lead.status = 'contatado';
                 lead.lastContact = new Date();
                 await lead.save();
-
-                const components = buildTemplateComponents(template, lead, finalMediaUrl, req.user);
-                
-                await this._sendMessageHelper(lead, {
-                    type: 'template',
-                    templateName: template.name,
-                    languageCode: template.language,
-                    components: components,
-                }, instance, req.user.settings);
 
                 successCount++;
             } catch (error) {

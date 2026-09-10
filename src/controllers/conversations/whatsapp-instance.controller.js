@@ -933,20 +933,46 @@ async function receiveWebhook(req, res) {
                                 errors: statusErrors
                             });
                         }
-                        const lead = await Lead.findOne({ phone: statusUpdate.recipient_id, user: instance.user._id });
+                        const recipientPhone = corrigirNumeroBrasil(onlyDigits(statusUpdate.recipient_id));
+                        const flexiblePhone = buildFlexiblePhoneRegex(recipientPhone);
+                        const phoneConditions = [
+                            { phone: recipientPhone },
+                            { 'contacts.value': recipientPhone }
+                        ];
+                        if (flexiblePhone) {
+                            phoneConditions.push(
+                                { phone: flexiblePhone },
+                                { 'contacts.value': flexiblePhone }
+                            );
+                        }
+                        const lead = await Lead.findOne({
+                            user: instance.user._id,
+                            $or: phoneConditions
+                        });
                         if (lead) {
                             const statusKey = `${statusUpdate.id}:${statusUpdate.status}`;
                             const inc = {};
                             if (statusUpdate.status === 'sent') inc.sentCount = 1;
                             if (statusUpdate.status === 'delivered') inc.deliveredCount = 1;
                             if (statusUpdate.status === 'read') inc.readCount = 1;
+                            const correlatedConversation = await Conversation.findOne({
+                                lead: lead._id,
+                                user: instance.user._id,
+                                instance: instance._id,
+                                status: { $ne: 'closed' },
+                                'messages.metadata.providerMessageId': statusUpdate.id
+                            }).select('_id');
+                            const conversationFilter = {
+                                lead: lead._id,
+                                user: instance.user._id,
+                                status: { $ne: 'closed' },
+                                processedStatusIds: { $ne: statusKey }
+                            };
+                            if (correlatedConversation) {
+                                conversationFilter._id = correlatedConversation._id;
+                            }
                             const statusConversation = await Conversation.findOneAndUpdate(
-                                {
-                                    lead: lead._id,
-                                    user: instance.user._id,
-                                    status: { $ne: 'closed' },
-                                    processedStatusIds: { $ne: statusKey }
-                                },
+                                conversationFilter,
                                 {
                                     ...(Object.keys(inc).length > 0 ? { $inc: inc } : {}),
                                     $addToSet: { processedStatusIds: statusKey },
